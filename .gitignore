@@ -1,0 +1,77 @@
+# ─── Terraform ───────────────────────────────────────────────
+# State and backups (remote state lives in Terraform Cloud — never commit local state)
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl.bak
+terraform.tfstate.d/
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Variable files that may contain secrets — commit *.tfvars.example only
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+!example.tfvars
+
+# Plan output / overrides
+*.tfplan
+*.tfplan.*
+plan.out
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI config / saved credentials
+.terraformrc
+terraform.rc
+
+# ─── Secrets & credentials ──────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+secrets.yaml
+secrets.yml
+*-secret.yaml
+*-secrets.yaml
+sealed-secrets.key
+
+# ─── Kubernetes / Helm / cloud ──────────────────────────────
+kubeconfig
+kubeconfig-*
+*.kubeconfig
+.kube/
+charts/
+*.tgz                       # packaged Helm charts
+helm-debug.yaml
+.helm/
+
+# Cloud provider credentials
+.aws/
+.gcp/
+gcp-key.json
+*-credentials.json
+service-account*.json
+
+# ─── Tooling / cache ────────────────────────────────────────
+.terragrunt-cache/
+.infracost/
+.tflint.d/
+*.log
+
+# ─── Editor / OS ────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
