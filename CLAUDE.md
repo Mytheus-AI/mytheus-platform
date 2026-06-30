@@ -1,10 +1,10 @@
 # CLAUDE.md
 
-This is `reprise-platform`, the platform and infrastructure repo for Reprise AI: Terraform IaC, Kubernetes (EKS/GKE), Helm, GitHub Actions CI/CD, observability, and multi-region DR. It contains no application code; it deploys the other Reprise AI repos. The single most important thing: this repo is infra-as-code only (no click-ops), every change goes plan -> review -> apply, and you never weaken tenant isolation or commit a secret.
+This is `mytheus-platform`, the platform and infrastructure repo for Mytheus: Terraform IaC, Kubernetes (EKS/GKE), Helm, GitHub Actions CI/CD, observability, and multi-region DR. It contains no application code; it deploys the other Mytheus repos. The single most important thing: this repo is infra-as-code only (no click-ops), every change goes plan -> review -> apply, and you never weaken tenant isolation or commit a secret.
 
 ## Repo at a glance
 
-This repo decides how and where every Reprise AI service runs, never what it does. It deploys the full canonical service set (roughly 20 services across four scaling families):
+This repo decides how and where every Mytheus service runs, never what it does. It deploys the full canonical service set (roughly 20 services across four scaling families):
 
 - CRUD / control plane: `api-gateway`, `bff`, `identity-tenant-service`, `core-api`, `meeting-service`, `integration-service`, `billing-metering-service`, `admin-ops-service`, `notification-service`
 - Real-time: `realtime-gateway`, `transcription-service`
@@ -14,7 +14,7 @@ This repo decides how and where every Reprise AI service runs, never what it doe
 Two substrates exist, by stage:
 
 - Production substrate: Kubernetes on AWS EKS / GCP GKE, provisioned by Terraform (state in Terraform Cloud), workloads delivered by Helm + Kustomize through Argo CD GitOps. Multi-region, active-passive evolving to active-active.
-- Early-stage path: before Kubernetes is warranted, Reprise AI runs as a modular monolith on Railway/Render with Docker Compose as the local-dev source of truth. The service seams are real from day one; the early stage just co-locates them in one deployable. Services are then extracted onto K8s in the frozen Wave 1-4 order (below).
+- Early-stage path: before Kubernetes is warranted, Mytheus runs as a modular monolith on Railway/Render with Docker Compose as the local-dev source of truth. The service seams are real from day one; the early stage just co-locates them in one deployable. Services are then extracted onto K8s in the frozen Wave 1-4 order (below).
 
 Ground every "why" in `system.md` and the canon docs it cites (`16-deployment-and-infrastructure.md` is the key one; also `15-observability-and-sre.md`, `14-reliability-and-dr.md`, `13-scalability-and-performance.md`, `17-cost-and-finops.md`, `12-compliance-and-privacy.md`).
 
@@ -58,7 +58,7 @@ Managed planes wired here (this repo provisions and wires them; app repos consum
 ## Where things live
 
 ```
-reprise-platform/
+mytheus-platform/
 ├── terraform/
 │   ├── modules/                 # versioned, region-reusable modules: network, cluster, data, edge, secrets, observability
 │   └── environments/
@@ -102,7 +102,7 @@ DR specifics that are intentional, not bugs: active-passive evolving to active-a
 
 ## Naming authority
 
-Service names, topic names, store names, bucket names (`nexus-recordings`, `nexus-documents`, `nexus-audit`, ...), the AGE graph `nexus_knowledge`, and the `nexus:{org_id}:` Redis prefix are frozen in `reprise-docs` `_canon/` (`01-service-catalog.md`, `02-data-model.md`, `03-event-taxonomy.md`). Deploy everything under those exact names. Never rename a service in a manifest, invent a topic or bucket, or introduce an alias. If a name seems wrong, the fix lands in `_canon/` first via ADR, then propagates here, never the reverse.
+Service names, topic names, store names, bucket names (`nexus-recordings`, `nexus-documents`, `nexus-audit`, ...), the AGE graph `nexus_knowledge`, and the `nexus:{org_id}:` Redis prefix are frozen in `mytheus-docs` `_canon/` (`01-service-catalog.md`, `02-data-model.md`, `03-event-taxonomy.md`). Deploy everything under those exact names. Never rename a service in a manifest, invent a topic or bucket, or introduce an alias. If a name seems wrong, the fix lands in `_canon/` first via ADR, then propagates here, never the reverse.
 
 ## Common tasks (recipes)
 
@@ -183,7 +183,7 @@ tfsec terraform/ && checkov -d terraform/
 
 ## Working with other repos
 
-This repo deploys, but does not own, the application repos: `reprise-web` (`web-app`, `bff`, `api-gateway`), `reprise-core-api` (CRUD/control plane), `reprise-realtime` (`realtime-gateway`, `transcription-service`), `reprise-ai` (AI/inference tier), `reprise-workflows` (`workflow-service`), and `reprise-sdk`. It wires the `reprise-events` / Redpanda Schema Registry. App repos own their own Dockerfiles, lint/test, and code; this repo owns the deploy substrate, rollout policy, and image promotion. Naming authority is `reprise-docs` `_canon/`.
+This repo deploys, but does not own, the application repos: `mytheus-web` (`web-app`, `bff`, `api-gateway`), `mytheus-core-api` (CRUD/control plane), `mytheus-realtime` (`realtime-gateway`, `transcription-service`), `mytheus` (AI/inference tier), `mytheus-workflows` (`workflow-service`), and `mytheus-sdk`. It wires the `mytheus-events` / Redpanda Schema Registry. App repos own their own Dockerfiles, lint/test, and code; this repo owns the deploy substrate, rollout policy, and image promotion. Naming authority is `mytheus-docs` `_canon/`.
 
 ## Commit and PR conventions
 

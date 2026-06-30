@@ -1,10 +1,10 @@
-# Reprise AI - Platform & Infrastructure (`reprise-platform`)
+# Mytheus - Platform & Infrastructure (`mytheus-platform`)
 
-> The deployment substrate for all of Reprise AI (internal codename **NEXUS**): Terraform IaC, Kubernetes manifests/Helm charts, CI/CD pipelines, the observability stack, and multi-region DR that runs every other repo's services.
+> The deployment substrate for all of Mytheus (internal codename **NEXUS**): Terraform IaC, Kubernetes manifests/Helm charts, CI/CD pipelines, the observability stack, and multi-region DR that runs every other repo's services.
 
 ## What this is
 
-`reprise-platform` is the **infrastructure / platform engineering** repo for Reprise AI - an intelligent meeting-orchestration multi-tenant SaaS sized at the frozen capacity anchors (5M registered users, 2M MAU, 20k peak concurrent meetings, 100k peak concurrent participants).
+`mytheus-platform` is the **infrastructure / platform engineering** repo for Mytheus - an intelligent meeting-orchestration multi-tenant SaaS sized at the frozen capacity anchors (5M registered users, 2M MAU, 20k peak concurrent meetings, 100k peak concurrent participants).
 
 This repo contains **no application code**. It is the substrate the application repos deploy *onto*:
 
@@ -43,7 +43,7 @@ If a service runs in production, the *how* and *where* of it lives here. The *wh
 ## Repo structure
 
 ```
-reprise-platform/
+mytheus-platform/
 ├── terraform/
 │   ├── modules/                 # versioned, region-reusable modules (network, cluster, data, edge, secrets, observability)
 │   └── environments/
@@ -82,7 +82,7 @@ kustomize build k8s/overlays/staging | kubeconform -strict
 
 Workloads are **not** applied with `kubectl` by hand. CI bumps the image digest in the deployment GitOps repo and Argo CD reconciles each cluster against it.
 
-**The Railway/Render early path:** before the Kubernetes substrate is warranted, Reprise AI runs as a **modular monolith on Railway/Render** with Docker Compose as the local-dev source of truth. Services are then peeled off in the frozen Wave 1–4 order (GPU + real-time + workers → CRUD core → SaaS business → retrieval stores) onto EKS/GKE. See [`system.md`](system.md) and `16-deployment-and-infrastructure.md`.
+**The Railway/Render early path:** before the Kubernetes substrate is warranted, Mytheus runs as a **modular monolith on Railway/Render** with Docker Compose as the local-dev source of truth. Services are then peeled off in the frozen Wave 1–4 order (GPU + real-time + workers → CRUD core → SaaS business → retrieval stores) onto EKS/GKE. See [`system.md`](system.md) and `16-deployment-and-infrastructure.md`.
 
 ## Environments
 
@@ -96,19 +96,19 @@ Production placement composes along three axes - **region × environment × cell
 
 ## Related repos
 
-`reprise-platform` deploys the other Reprise AI repos. The full set (8):
+`mytheus-platform` deploys the other Mytheus repos. The full set (8):
 
-1. **`reprise-platform`** - this repo: IaC, Kubernetes, CI/CD, observability, DR.
-2. **`reprise-docs`** - architecture canon and the frozen `_canon/` naming authority (service, topic, and store names).
-3. **`reprise-core-api`** - CRUD / control-plane services (`core-api`, `identity-tenant-service`, `meeting-service`, `billing-metering-service`, `integration-service`, `admin-ops-service`, `notification-service`).
-4. **`reprise-realtime`** - real-time tier (`realtime-gateway`, `transcription-service`).
-5. **`reprise-ai`** - AI / inference tier (`agent-runtime-service`, `embedding-service`, `reranker-service`, `rag-service`, `ingestion-service`, `knowledge-graph-service`, `search-service`).
-6. **`reprise-workflows`** - async orchestration (`workflow-service`, Temporal workers).
-7. **`reprise-web`** - `web-app` (Next.js 14) and the `bff`/`api-gateway` edge.
-8. **`reprise-sdk`** - shared client/SDK and contracts.
+1. **`mytheus-platform`** - this repo: IaC, Kubernetes, CI/CD, observability, DR.
+2. **`mytheus-docs`** - architecture canon and the frozen `_canon/` naming authority (service, topic, and store names).
+3. **`mytheus-core-api`** - CRUD / control-plane services (`core-api`, `identity-tenant-service`, `meeting-service`, `billing-metering-service`, `integration-service`, `admin-ops-service`, `notification-service`).
+4. **`mytheus-realtime`** - real-time tier (`realtime-gateway`, `transcription-service`).
+5. **`mytheus`** - AI / inference tier (`agent-runtime-service`, `embedding-service`, `reranker-service`, `rag-service`, `ingestion-service`, `knowledge-graph-service`, `search-service`).
+6. **`mytheus-workflows`** - async orchestration (`workflow-service`, Temporal workers).
+7. **`mytheus-web`** - `web-app` (Next.js 14) and the `bff`/`api-gateway` edge.
+8. **`mytheus-sdk`** - shared client/SDK and contracts.
 
-Service, topic, and store names are owned by `reprise-docs` `_canon/`. This repo deploys them under those exact names - it never renames anything.
+Service, topic, and store names are owned by `mytheus-docs` `_canon/`. This repo deploys them under those exact names - it never renames anything.
 
 ## License
 
-Proprietary © Reprise AI. All rights reserved.
+Proprietary © Mytheus. All rights reserved.

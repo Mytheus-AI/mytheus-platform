@@ -1,14 +1,14 @@
-# `reprise-platform` - Platform & Infrastructure System Doc
+# `mytheus-platform` - Platform & Infrastructure System Doc
 
-Deep reference for the deployment substrate of **Reprise AI** (internal codename **NEXUS**). This is the platform-engineering repo: it builds the cloud substrate, packages and schedules every service, ships them through CI/CD, observes them, and keeps them available across regions. It contains no application logic - it deploys the other Reprise AI repos.
+Deep reference for the deployment substrate of **Mytheus** (internal codename **NEXUS**). This is the platform-engineering repo: it builds the cloud substrate, packages and schedules every service, ships them through CI/CD, observes them, and keeps them available across regions. It contains no application logic - it deploys the other Mytheus repos.
 
-Canon references throughout cite the architecture set by filename: `16-deployment-and-infrastructure.md` (the key doc), `15-observability-and-sre.md`, `14-reliability-and-dr.md`, `13-scalability-and-performance.md`, `17-cost-and-finops.md`, and `12-compliance-and-privacy.md`. Frozen names (service names, topic names, store names, the `nexus:{org_id}:` Redis prefix) come from `reprise-docs` `_canon/` and are used verbatim.
+Canon references throughout cite the architecture set by filename: `16-deployment-and-infrastructure.md` (the key doc), `15-observability-and-sre.md`, `14-reliability-and-dr.md`, `13-scalability-and-performance.md`, `17-cost-and-finops.md`, and `12-compliance-and-privacy.md`. Frozen names (service names, topic names, store names, the `nexus:{org_id}:` Redis prefix) come from `mytheus-docs` `_canon/` and are used verbatim.
 
 ---
 
 ## 1. Purpose & scope
 
-`reprise-platform` is the single home for **where every Reprise AI service runs, how it is built and shipped, how it is observed, and how the topology grows from the first deploy to multi-region scale**. It owns:
+`mytheus-platform` is the single home for **where every Mytheus service runs, how it is built and shipped, how it is observed, and how the topology grows from the first deploy to multi-region scale**. It owns:
 
 - The cloud substrate (Terraform IaC).
 - Kubernetes packaging, scheduling, isolation, and ingress.
@@ -19,7 +19,7 @@ Canon references throughout cite the architecture set by filename: `16-deploymen
 - The observability stack and SLO dashboards/alerts.
 - Multi-region topology, DR, and failover runbooks.
 
-It does **not** rename services (that is `reprise-docs` `_canon/01-service-catalog.md`), redefine containers (that is `03-container-architecture.md`), or re-derive load (that is `_canon/05-capacity-math.md`). The infra specifics it does introduce - replica floors, HPA targets, node-pool shapes, rollout weights - are derived from, and never contradict, the frozen capacity anchors (A5 = 20k concurrent meetings, A6 = 100k concurrent participants, A10 = 4:1 peak:average, L9 ≈ 8,930 LLM calls/s, EM2 ≈ 525 embeds/s, EM4 ≈ 700 query-embeds/s).
+It does **not** rename services (that is `mytheus-docs` `_canon/01-service-catalog.md`), redefine containers (that is `03-container-architecture.md`), or re-derive load (that is `_canon/05-capacity-math.md`). The infra specifics it does introduce - replica floors, HPA targets, node-pool shapes, rollout weights - are derived from, and never contradict, the frozen capacity anchors (A5 = 20k concurrent meetings, A6 = 100k concurrent participants, A10 = 4:1 peak:average, L9 ≈ 8,930 LLM calls/s, EM2 ≈ 525 embeds/s, EM4 ≈ 700 query-embeds/s).
 
 ---
 
@@ -50,7 +50,7 @@ Production runs on **Kubernetes (AWS EKS / GCP GKE) with Terraform IaC**, multi-
 
 ### 3.2 Early stage: Railway/Render modular monolith
 
-Before Kubernetes is warranted, Reprise AI runs as a **modular monolith on Railway/Render**, with Docker Compose as the local-dev source of truth (carried over verbatim from the original execution plan). The service seams are real from day one; the early stage simply co-locates them in one deployable.
+Before Kubernetes is warranted, Mytheus runs as a **modular monolith on Railway/Render**, with Docker Compose as the local-dev source of truth (carried over verbatim from the original execution plan). The service seams are real from day one; the early stage simply co-locates them in one deployable.
 
 ### 3.3 Extraction waves (Railway/Render → Kubernetes)
 
@@ -114,7 +114,7 @@ Terraform Cloud is the single control plane for all cloud-provider state; nothin
 
 ## 7. Managed planes wired here
 
-`reprise-platform` provisions and wires the managed data and service planes; the application repos consume them. No secrets are committed - connection strings and keys flow through ESO (§8).
+`mytheus-platform` provisions and wires the managed data and service planes; the application repos consume them. No secrets are committed - connection strings and keys flow through ESO (§8).
 
 | Plane | Provider | Wired by |
 |---|---|---|
@@ -224,4 +224,4 @@ Three binding principles: every signal is tenant-attributable (`org_id` on every
 
 ### Canon docs referenced
 
-`16-deployment-and-infrastructure.md`, `15-observability-and-sre.md`, `14-reliability-and-dr.md`, `13-scalability-and-performance.md`, `17-cost-and-finops.md`, `12-compliance-and-privacy.md`, `03-container-architecture.md`, `09-rag-and-inference-serving.md`, `06-multi-tenancy.md`, `07-event-architecture.md`, `11-security-architecture.md`, and the frozen `reprise-docs` `_canon/` (`01-service-catalog.md`, `02-data-model.md`, `03-event-taxonomy.md`, `05-capacity-math.md`, `06-tech-decisions.md`). ADRs: 0008, 0009, 0014, 0015.
+`16-deployment-and-infrastructure.md`, `15-observability-and-sre.md`, `14-reliability-and-dr.md`, `13-scalability-and-performance.md`, `17-cost-and-finops.md`, `12-compliance-and-privacy.md`, `03-container-architecture.md`, `09-rag-and-inference-serving.md`, `06-multi-tenancy.md`, `07-event-architecture.md`, `11-security-architecture.md`, and the frozen `mytheus-docs` `_canon/` (`01-service-catalog.md`, `02-data-model.md`, `03-event-taxonomy.md`, `05-capacity-math.md`, `06-tech-decisions.md`). ADRs: 0008, 0009, 0014, 0015.
