@@ -1,0 +1,157 @@
+# Self-hosted VPS deploy of the mytheus-backend modular monolith + its data stores.
+#
+# Resolved infra decision (§8): self-host on the existing VPS rather than Railway/Render. The
+# service seams stay real (16-deployment §3.1); this just co-locates them in one deployable on one
+# box (srv1756037.hstgr.cloud, KVM 8). One backend image runs three roles (web / relay / workflow);
+# Postgres, Redis, and Redpanda (+ Schema Registry) are self-hosted here. Per-store split is
+# confirmed at deploy time: point DATABASE_URL at the local `postgres` service OR a managed
+# Supabase Postgres by editing env/prod.env — nothing else changes.
+#
+# Bring up:  POSTGRES_PASSWORD=... docker compose -f compose.prod.yml up -d --build
+# Validate:  docker compose -f compose.prod.yml config
+
+name: mytheus
+
+x-backend: &backend
+  image: ${BACKEND_IMAGE:-mytheus-backend:plan0}
+  build:
+    context: ${BACKEND_CONTEXT:-../../mytheus-backend}
+  env_file:
+    - path: ../env/prod.env
+      required: false
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: supabase/postgres:15.8.1.060
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/prod.env}
+      POSTGRES_DB: ${POSTGRES_DB:-mytheus}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  redpanda:
+    image: redpandadata/redpanda:v24.1.1
+    command:
+      - redpanda start
+      - --smp 1
+      - --overprovisioned
+      - --node-id 0
+      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://redpanda:9092
+      - --schema-registry-addr http://0.0.0.0:8081
+      - --pandaproxy-addr http://0.0.0.0:8082
+    volumes:
+      - redpandadata:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  temporal:
+    image: temporalio/auto-setup:1.24
+    environment:
+      DB: postgresql
+      DB_PORT: "5432"
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/prod.env}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-shot: apply Alembic migrations (RLS FORCE, outbox/inbox, core tables) before web starts.
+  migrate:
+    <<: *backend
+    command: ["alembic", "-c", "migrations/alembic.ini", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  web:
+    <<: *backend
+    command: ["uvicorn", "services.core_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "8000"
+
+  # The ONLY sanctioned producer: drains the transactional outbox to Redpanda.
+  relay:
+    <<: *backend
+    command: ["python", "-m", "services.relay.main"]
+    depends_on:
+      web:
+        condition: service_started
+      redpanda:
+        condition: service_healthy
+
+  # Temporal durable-orchestration workers.
+  workflow:
+    <<: *backend
+    command: ["python", "-m", "services.workflow_service.worker"]
+    depends_on:
+      temporal:
+        condition: service_started
+      web:
+        condition: service_started
+
+  # TLS termination + reverse proxy (automatic HTTPS via ACME for PUBLIC_HOSTNAME).
+  caddy:
+    image: caddy:2
+    depends_on:
+      - web
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:-srv1756037.hstgr.cloud}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  redisdata:
+  redpandadata:
+  caddydata:
+  caddyconfig:

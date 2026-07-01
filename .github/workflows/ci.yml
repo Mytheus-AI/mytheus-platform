@@ -1,0 +1,63 @@
+name: ci
+
+# Canonical CI template for the Mytheus code repos (shift-left from day one:
+# 16-deployment-and-infrastructure.md §5.2, system.md §9). Each code repo carries a thin copy of
+# this that runs the jobs relevant to it. mytheus-ui is intentionally out of scope of this template
+# (it owns its own Next.js CI). Secrets are never committed; the security job enforces it.
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+jobs:
+  python:
+    # Python repos: mytheus-backend, mytheus-intelligence, mytheus-events, transcription-service.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv sync
+      - run: uv run ruff check . && uv run black --check .
+      - run: uv run mypy .
+      - run: uv run pytest -q
+
+  authz-check:
+    # Shift-left security: every FastAPI route must declare an auth dependency or be explicitly
+    # public (11-security-architecture.md §3.2). Wired in the backend's copy of this workflow.
+    if: contains(github.repository, 'mytheus-backend')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v3
+      - run: uv run python scripts/check_authz.py
+
+  avro-compat:
+    # The BACKWARD compatibility gate. mytheus-events only.
+    if: contains(github.repository, 'mytheus-events')
+    runs-on: ubuntu-latest
+    services:
+      redpanda:
+        image: docker.redpanda.com/redpandadata/redpanda:latest
+        ports:
+          - "8081:8081"
+    steps:
+      - uses: actions/checkout@v4
+      - run: make validate && make register && make check-compatibility
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+      - run: pip install pip-audit && pip-audit || true
+
+  docker:
+    # Build the deployable image so a broken Dockerfile fails the PR, not the deploy.
+    if: contains(github.repository, 'mytheus-backend')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -t "mytheus-backend:${GITHUB_SHA}" .

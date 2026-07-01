@@ -1,0 +1,11 @@
+# pre-commit hooks for mytheus-platform. Install once: `pre-commit install`.
+# Infra-as-code: no application sources; the gates are secret-scanning + workflow linting.
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.18.4
+    hooks:
+      - id: gitleaks
+  - repo: https://github.com/rhysd/actionlint
+    rev: v1.7.7
+    hooks:
+      - id: actionlint

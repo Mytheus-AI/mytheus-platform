@@ -34,6 +34,10 @@ terraform.rc
 .env
 .env.*
 !.env.example
+# Filled per-environment deploy env files (env/dev.env, env/prod.env, ...) — never commit; only
+# the *.env.example templates are tracked.
+env/*.env
+!env/*.env.example
 *.pem
 *.key
 *.p12
