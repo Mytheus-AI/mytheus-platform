@@ -12,6 +12,11 @@
 
 name: mytheus
 
+# Shared, NON-DATABASE config only. Defect D1 had two halves: the application connected as a
+# role that bypasses RLS, and this one anchor handed the same env_file to migrate, web, relay
+# and workflow, so splitting the roles would have achieved nothing while every process could
+# still read every credential. The database URL now comes from a per-role file layered on top
+# of this one, so the web process has no way to obtain the migrate or operator credential.
 x-backend: &backend
   image: ${BACKEND_IMAGE:-mytheus-backend:plan0}
   build:
@@ -20,6 +25,15 @@ x-backend: &backend
     - path: ../env/prod.env
       required: false
   restart: unless-stopped
+
+# The request path: `mytheus_app`, subject to every tenant_isolation policy.
+x-backend-app: &backend-app
+  <<: *backend
+  env_file:
+    - path: ../env/prod.env
+      required: false
+    - path: ../env/prod.db.app.env
+      required: false
 
 services:
   postgres:
@@ -82,17 +96,28 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
-  # One-shot: apply Alembic migrations (RLS FORCE, outbox/inbox, core tables) before web starts.
+  # One-shot: apply migrations, then give the three roles their passwords. The migration
+  # creates them without one on purpose, so bootstrap_roles must run before `web` starts or
+  # nothing can authenticate. This is the ONLY process holding the schema-owner credential
+  # and the only one holding the role passwords.
   migrate:
     <<: *backend
-    command: ["alembic", "-c", "migrations/alembic.ini", "upgrade", "head"]
+    env_file:
+      - path: ../env/prod.env
+        required: false
+      - path: ../env/prod.db.migrate.env
+        required: false
+    command:
+      - sh
+      - -c
+      - "alembic -c migrations/alembic.ini upgrade head && python -m scripts.bootstrap_roles"
     depends_on:
       postgres:
         condition: service_healthy
     restart: "no"
 
   web:
-    <<: *backend
+    <<: *backend-app
     command: ["uvicorn", "services.core_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       migrate:
@@ -113,9 +138,17 @@ services:
     expose:
       - "8000"
 
-  # The ONLY sanctioned producer: drains the transactional outbox to Redpanda.
+  # The ONLY sanctioned producer: drains the transactional outbox to Redpanda. Runs as
+  # `mytheus_relay`, whose single permissive `outbox_relay_drain` policy on `outbox` is what
+  # lets it read across tenants without BYPASSRLS. Running it as `mytheus_app` would drain
+  # nothing at all and report an empty queue forever (defect D4).
   relay:
     <<: *backend
+    env_file:
+      - path: ../env/prod.env
+        required: false
+      - path: ../env/prod.db.relay.env
+        required: false
     command: ["python", "-m", "services.relay.main"]
     depends_on:
       web:
@@ -123,9 +156,10 @@ services:
       redpanda:
         condition: service_healthy
 
-  # Temporal durable-orchestration workers.
+  # Temporal durable-orchestration workers. Request-path role: activities drive CRUD over
+  # REST against core-api rather than cross-writing tables, so they need nothing more.
   workflow:
-    <<: *backend
+    <<: *backend-app
     command: ["python", "-m", "services.workflow_service.worker"]
     depends_on:
       temporal:
