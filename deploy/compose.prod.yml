@@ -27,7 +27,7 @@ x-backend: &backend
   #
   # mytheus-backend's CI now publishes this image (ci.yml, `docker` job). `main` follows the
   # branch; pin BACKEND_IMAGE to a `:<sha>` tag to hold a specific build or roll back.
-  image: ${BACKEND_IMAGE:-ghcr.io/reprise-ai/mytheus-backend:main}
+  image: ${BACKEND_IMAGE:-ghcr.io/mytheus-ai/mytheus-backend:main}
   pull_policy: always
   env_file:
     - path: ../env/prod.env
