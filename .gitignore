@@ -79,3 +79,5 @@ Thumbs.db
 *.swp
 *.swo
 *~
+
+deploy/postgres-init/prod-bootstrap.sql

@@ -42,6 +42,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/prod.env}
       POSTGRES_DB: ${POSTGRES_DB:-mytheus}
     volumes:
+      - ./postgres-init/prod-bootstrap.sql:/etc/postgresql.schema.sql:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -85,12 +86,12 @@ services:
   temporal:
     image: temporalio/auto-setup:1.24
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: "5432"
       POSTGRES_USER: postgres
       POSTGRES_PWD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/prod.env}
       POSTGRES_SEEDS: postgres
-      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
     depends_on:
       postgres:
         condition: service_healthy
