@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
 # Deploy the Mytheus modular monolith to the VPS. Idempotent: safe to re-run.
 #
-# Assumes both repos are cloned side by side on the box (see deploy/README.md):
-#   ~/mytheus/mytheus-platform  (this repo)  and  ~/mytheus/mytheus-backend
-# and that env/prod.env exists (copied from env/prod.env.example and filled). Run from this dir:
+# This is the manual fallback path. Dokploy is the normal way to deploy (it runs the same
+# compose file under the same project name, `mytheus`, so both paths drive one stack and one
+# set of volumes). Keep this script working: it is what you reach for when Dokploy itself is
+# the thing that is broken.
+#
+# Only THIS repo needs to be cloned; the backend arrives as a published image from GHCR, so
+# the sibling mytheus-backend checkout the old version required is no longer involved.
+# Requires env/prod.env (copied from env/prod.env.example and filled). Run from this dir:
 #   ./deploy.sh
 set -euo pipefail
 
@@ -24,10 +29,12 @@ set +a
 
 echo "==> Pulling latest code"
 git -C .. pull --ff-only || true
-git -C ../../mytheus-backend pull --ff-only || true
 
-echo "==> Building + starting the stack"
-docker compose -f compose.prod.yml up -d --build
+# --pull always, not --build. The backend image is built and published by mytheus-backend's
+# CI; building it here would produce an image that matches no commit anyone can identify and
+# would silently diverge from whatever Dokploy deploys.
+echo "==> Pulling images + starting the stack"
+docker compose -f compose.prod.yml up -d --pull always
 
 echo "==> Waiting for the web healthcheck"
 for i in $(seq 1 30); do
@@ -39,4 +46,4 @@ done
 
 echo "==> Current state"
 docker compose -f compose.prod.yml ps
-echo "Done. /healthz is served via Caddy on https://${PUBLIC_HOSTNAME:-srv1756037.hstgr.cloud}/healthz"
+echo "Done. /healthz is served on https://${PUBLIC_HOSTNAME:-api.mytheus.cloud}/healthz"

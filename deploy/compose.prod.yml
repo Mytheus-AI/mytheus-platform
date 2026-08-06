@@ -18,9 +18,17 @@ name: mytheus
 # still read every credential. The database URL now comes from a per-role file layered on top
 # of this one, so the web process has no way to obtain the migrate or operator credential.
 x-backend: &backend
-  image: ${BACKEND_IMAGE:-mytheus-backend:plan0}
-  build:
-    context: ${BACKEND_CONTEXT:-../../mytheus-backend}
+  # Pulled, never built here. The `build: context: ../../mytheus-backend` this replaces
+  # required a second repo checked out as a sibling of this one, which is why the stack could
+  # only ever be deployed by hand on a box where someone had arranged that layout: any deploy
+  # tool clones ONE repo and the relative path resolves to nothing. It also meant the running
+  # image existed nowhere but the machine that built it, so a rebuild was not reproducible and
+  # a rollback had nothing to roll back to.
+  #
+  # mytheus-backend's CI now publishes this image (ci.yml, `docker` job). `main` follows the
+  # branch; pin BACKEND_IMAGE to a `:<sha>` tag to hold a specific build or roll back.
+  image: ${BACKEND_IMAGE:-ghcr.io/reprise-ai/mytheus-backend:main}
+  pull_policy: always
   env_file:
     - path: ../env/prod.env
       required: false
