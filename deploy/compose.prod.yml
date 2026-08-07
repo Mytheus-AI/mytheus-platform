@@ -59,9 +59,15 @@ x-backend-app: &backend-app
 services:
   postgres:
     image: supabase/postgres:15.8.1.060
-    environment:
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/prod.env}
-      POSTGRES_DB: ${POSTGRES_DB:-mytheus}
+    # POSTGRES_PASSWORD arrives via env_file, NOT `${POSTGRES_PASSWORD}` interpolation.
+    # Interpolation cannot read an env_file: it resolves from the shell or the project .env
+    # before compose parses anything. So an interpolated superuser password has to be handed
+    # to whatever runs the deploy, and Dokploy stores env in its database and serves it back
+    # in plaintext to any holder of an API key. Reading it from the host file instead keeps
+    # the strongest credential in the stack out of that blast radius.
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
+        required: false
     volumes:
       # Path is a variable for the same reason MYTHEUS_ENV_DIR is: this file holds the postgres
       # password, so it is gitignored and absent from any fresh clone. Left as a bare relative
@@ -112,11 +118,17 @@ services:
 
   temporal:
     image: temporalio/auto-setup:1.24
+    # Its own one-line env file rather than prod.env, for the same reason the backend roles
+    # each get their own: temporal needs exactly one secret (the postgres password, under the
+    # name POSTGRES_PWD that this image expects) and handing it prod.env would also hand it
+    # every Clerk, Stripe and LiveKit credential it has no business holding.
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.db.temporal.env
+        required: false
     environment:
       DB: postgres12
       DB_PORT: "5432"
       POSTGRES_USER: postgres
-      POSTGRES_PWD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/prod.env}
       POSTGRES_SEEDS: postgres
       DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/docker.yaml
     depends_on:
