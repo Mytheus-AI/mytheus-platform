@@ -2,12 +2,25 @@
 #
 # Resolved infra decision (§8): self-host on the existing VPS rather than Railway/Render. The
 # service seams stay real (16-deployment §3.1); this just co-locates them in one deployable on one
-# box (srv1756037.hstgr.cloud, KVM 8). One backend image runs three roles (web / relay / workflow);
+# box (srv1804132, 187.127.190.246). One backend image runs three roles (web / relay / workflow);
 # Postgres, Redis, and Redpanda (+ Schema Registry) are self-hosted here. Per-store split is
 # confirmed at deploy time: point DATABASE_URL at the local `postgres` service OR a managed
 # Supabase Postgres by editing env/prod.env — nothing else changes.
 #
-# Bring up:  POSTGRES_PASSWORD=... docker compose -f compose.prod.yml up -d --build
+# SECRETS ARE NOT IN THIS REPO. The env/*.env files and postgres-init/prod-bootstrap.sql are
+# gitignored, so they exist only on the deployment host. Every path to them is therefore a
+# variable with a working default:
+#
+#   MYTHEUS_ENV_DIR   directory holding prod.env + the three per-role prod.db.*.env files
+#   MYTHEUS_PG_INIT   path to the postgres post-init hook
+#
+# Defaults are the relative paths that work when deploying from a full working copy
+# (./deploy.sh). A deploy tool clones only what git tracks, so it must point these at the
+# host directory that holds the real files. Keeping the secrets on the host rather than in
+# the deploy tool's database also means re-cloning never destroys them and no credential is
+# duplicated into another system's storage.
+#
+# Bring up:  POSTGRES_PASSWORD=... docker compose -f compose.prod.yml up -d
 # Validate:  docker compose -f compose.prod.yml config
 
 name: mytheus
@@ -30,7 +43,7 @@ x-backend: &backend
   image: ${BACKEND_IMAGE:-ghcr.io/mytheus-ai/mytheus-backend:main}
   pull_policy: always
   env_file:
-    - path: ../env/prod.env
+    - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
       required: false
   restart: unless-stopped
 
@@ -38,9 +51,9 @@ x-backend: &backend
 x-backend-app: &backend-app
   <<: *backend
   env_file:
-    - path: ../env/prod.env
+    - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
       required: false
-    - path: ../env/prod.db.app.env
+    - path: ${MYTHEUS_ENV_DIR:-../env}/prod.db.app.env
       required: false
 
 services:
@@ -50,7 +63,13 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in env/prod.env}
       POSTGRES_DB: ${POSTGRES_DB:-mytheus}
     volumes:
-      - ./postgres-init/prod-bootstrap.sql:/etc/postgresql.schema.sql:ro
+      # Path is a variable for the same reason MYTHEUS_ENV_DIR is: this file holds the postgres
+      # password, so it is gitignored and absent from any fresh clone. Left as a bare relative
+      # path, a deploy-tool checkout resolves it to nothing and Docker silently creates an empty
+      # DIRECTORY at the mount point. That is invisible today because the hook only runs against
+      # an uninitialised data directory and pgdata already exists, but it would break the first
+      # boot on a new volume, which is the one moment it has to work.
+      - ${MYTHEUS_PG_INIT:-./postgres-init/prod-bootstrap.sql}:/etc/postgresql.schema.sql:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -112,9 +131,9 @@ services:
   migrate:
     <<: *backend
     env_file:
-      - path: ../env/prod.env
+      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
         required: false
-      - path: ../env/prod.db.migrate.env
+      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.db.migrate.env
         required: false
     command:
       - sh
@@ -154,9 +173,9 @@ services:
   relay:
     <<: *backend
     env_file:
-      - path: ../env/prod.env
+      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
         required: false
-      - path: ../env/prod.db.relay.env
+      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.db.relay.env
         required: false
     command: ["python", "-m", "services.relay.main"]
     depends_on:
