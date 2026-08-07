@@ -1,8 +1,0 @@
-# Caddy reverse proxy for the VPS deploy. Automatic HTTPS (ACME) for PUBLIC_HOSTNAME, which must
-# have a public A/AAAA record pointing at the VPS and ports 80/443 open. To serve plain HTTP during
-# bring-up (no domain yet), set PUBLIC_HOSTNAME=:80.
-
-{$PUBLIC_HOSTNAME} {
-	encode gzip
-	reverse_proxy web:8000
-}

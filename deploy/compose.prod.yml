@@ -176,25 +176,17 @@ services:
       web:
         condition: service_started
 
-  # TLS termination + reverse proxy (automatic HTTPS via ACME for PUBLIC_HOSTNAME).
-  caddy:
-    image: caddy:2
-    depends_on:
-      - web
-    ports:
-      - "80:80"
-      - "443:443"
-    environment:
-      PUBLIC_HOSTNAME: ${PUBLIC_HOSTNAME:-srv1756037.hstgr.cloud}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddydata:/data
-      - caddyconfig:/config
-    restart: unless-stopped
+  # No TLS terminator here on purpose. This box already runs one Caddy (the
+  # atithivishram-prod stack) holding 80/443, and it is the only listener the host's
+  # cf-origin-lock admits Cloudflare traffic to. That Caddy terminates api.mytheus.cloud and
+  # vps.mytheus.cloud and reverse-proxies to `web:8000` over the shared docker network.
+  #
+  # A `caddy` service used to be declared here publishing 80 and 443. It has never actually
+  # run, because those ports were already bound; leaving it declared meant any tool that
+  # brought the full stack up (Dokploy included) would fail on a port collision. Removed
+  # rather than left dormant so the file describes what really runs.
 
 volumes:
   pgdata:
   redisdata:
   redpandadata:
-  caddydata:
-  caddyconfig:
