@@ -176,6 +176,13 @@ services:
 
   web:
     <<: *backend-app
+    # Aliased to `core-api` because that is the canonical service name the gateway's ROUTE_MAP
+    # resolves (`http://core-api:8000`). Kept as the service key `web` rather than renamed so
+    # the container is not recreated and Caddy's existing `web:8000` upstream keeps working
+    # during the cutover; both names resolve on the network.
+    networks:
+      default:
+        aliases: ["core-api"]
     command: ["uvicorn", "services.core_api.main:app", "--host", "0.0.0.0", "--port", "8000"]
     depends_on:
       migrate:
@@ -224,6 +231,109 @@ services:
         condition: service_started
       web:
         condition: service_started
+
+  # --- The rest of the service tier ------------------------------------------------------
+  #
+  # Until now exactly ONE of the nine HTTP services ran in production (core-api, as `web`),
+  # so the deployed API was 8 routes and everything else existed only as an importable module.
+  # That included api-gateway itself - the component 11-security-architecture.md relies on to
+  # fail closed before a tenant-scoped store is touched - and meeting-service, which owns the
+  # only route that mints a LiveKit room token.
+  #
+  # Each service key is the CANONICAL service name from `_canon/01-service-catalog.md`, because
+  # the gateway resolves upstreams by that name over docker DNS (`http://<service>:8000`).
+  # Renaming one here silently unroutes it; the gateway's route-map test is what catches that.
+  #
+  # None publish a port. The gateway is the single ingress, and it is reached over the docker
+  # network by the Caddy that holds 443.
+
+  # The single public ingress: JWT pre-validation, tenant resolution, signed internal headers,
+  # then forwarding. Uses the app DB role because resolving the tenant reads `organizations`.
+  api-gateway:
+    <<: *backend-app
+    command: ["uvicorn", "services.api_gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      web:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "8000"
+
+  bff:
+    <<: *backend-app
+    command: ["uvicorn", "services.bff.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  identity-tenant-service:
+    <<: *backend-app
+    command:
+      - uvicorn
+      - services.identity_tenant_service.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Owns the LiveKit transport: room token mint and the LiveKit webhook. Reads
+  # LIVEKIT_URL/LIVEKIT_API_KEY/LIVEKIT_API_SECRET from prod.env; without them
+  # `select_transport()` falls back to FakeTransport and mints obviously-fake tokens.
+  meeting-service:
+    <<: *backend-app
+    command: ["uvicorn", "services.meeting_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # These four currently expose no routes beyond /healthz - they are scaffolds whose bands have
+  # not landed. Deployed anyway so the topology is complete and the gateway's route map has a
+  # real upstream to reach: a request to /billing gets a 404 FROM billing-metering-service,
+  # which is the truth, rather than a 404 from the gateway that looks identical to a routing bug.
+  integration-service:
+    <<: *backend-app
+    command: ["uvicorn", "services.integration_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  billing-metering-service:
+    <<: *backend-app
+    command:
+      - uvicorn
+      - services.billing_metering_service.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  admin-ops-service:
+    <<: *backend-app
+    command: ["uvicorn", "services.admin_ops_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  notification-service:
+    <<: *backend-app
+    command: ["uvicorn", "services.notification_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
 
   # No TLS terminator here on purpose. This box already runs one Caddy (the
   # atithivishram-prod stack) holding 80/443, and it is the only listener the host's
