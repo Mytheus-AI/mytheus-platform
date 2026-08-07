@@ -1,0 +1,21 @@
+# Deployment entrypoint for tools that drive this repo from its root (Dokploy).
+#
+# The real stack is deploy/compose.prod.yml; this file only pulls it in. It exists because of
+# a specific, silent failure mode.
+#
+# Dokploy invokes compose with --project-directory set to the clone ROOT, but writes the .env
+# holding the deployment's variables next to the compose file it was pointed at. Point it at
+# deploy/compose.prod.yml and those two directories differ: compose reads .env from the project
+# directory, finds none, and every ${VAR} falls back to its default. For this stack that meant
+# MYTHEUS_ENV_DIR went unset, the env_file entries (required: false, by design, so a working
+# copy without secrets still renders) silently resolved to nothing, and the backend started
+# with no DATABASE_URL at all. Nothing errored at compose level - `migrate` just died on
+# KeyError: 'DATABASE_URL' with no indication that a path had gone missing.
+#
+# Keeping the entrypoint at the root makes the project directory and the .env location the
+# same directory, so the variables actually arrive.
+#
+# deploy.sh is unaffected: it runs `-f compose.prod.yml` from inside deploy/, where the
+# relative defaults are correct. Use this file only from the repository root.
+include:
+  - deploy/compose.prod.yml
