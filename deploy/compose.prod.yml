@@ -14,11 +14,22 @@
 #   MYTHEUS_ENV_DIR   directory holding prod.env + the three per-role prod.db.*.env files
 #   MYTHEUS_PG_INIT   path to the postgres post-init hook
 #
-# Defaults are the relative paths that work when deploying from a full working copy
-# (./deploy.sh). A deploy tool clones only what git tracks, so it must point these at the
-# host directory that holds the real files. Keeping the secrets on the host rather than in
-# the deploy tool's database also means re-cloning never destroys them and no credential is
-# duplicated into another system's storage.
+# The defaults are ABSOLUTE host paths, not the relative ones you would expect, because a
+# relative default is unsafe here. Dokploy wipes and re-clones the working directory on every
+# deploy and rewrites its .env afterwards, leaving a window of a few seconds in which no .env
+# exists. Compose runs inside that window, reads no .env, and silently falls back to every
+# default. With relative defaults that resolved to a path containing nothing, so the env_file
+# entries (required: false, so a checkout without secrets still renders) matched nothing and
+# the backend started with no DATABASE_URL at all - reported only as `migrate` dying on
+# KeyError: 'DATABASE_URL', which points nowhere near the cause. Absolute defaults resolve
+# correctly whether or not the variables ever arrive.
+#
+# The consequence is that these paths are specific to this host. That is already true of this
+# whole file (it names the box above), and it is the price of a deploy tool that cannot
+# guarantee its own environment is present when it runs compose. Override both variables to
+# deploy anywhere else. Keeping the secrets on the host rather than in the deploy tool's
+# database also means re-cloning never destroys them and no credential is duplicated into
+# another system's storage.
 #
 # Bring up:  POSTGRES_PASSWORD=... docker compose -f compose.prod.yml up -d
 # Validate:  docker compose -f compose.prod.yml config
@@ -43,7 +54,7 @@ x-backend: &backend
   image: ${BACKEND_IMAGE:-ghcr.io/mytheus-ai/mytheus-backend:main}
   pull_policy: always
   env_file:
-    - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
+    - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
       required: false
   restart: unless-stopped
 
@@ -51,9 +62,9 @@ x-backend: &backend
 x-backend-app: &backend-app
   <<: *backend
   env_file:
-    - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
+    - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
       required: false
-    - path: ${MYTHEUS_ENV_DIR:-../env}/prod.db.app.env
+    - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.db.app.env
       required: false
 
 services:
@@ -66,7 +77,7 @@ services:
     # in plaintext to any holder of an API key. Reading it from the host file instead keeps
     # the strongest credential in the stack out of that blast radius.
     env_file:
-      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
+      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
         required: false
     volumes:
       # Path is a variable for the same reason MYTHEUS_ENV_DIR is: this file holds the postgres
@@ -75,7 +86,7 @@ services:
       # DIRECTORY at the mount point. That is invisible today because the hook only runs against
       # an uninitialised data directory and pgdata already exists, but it would break the first
       # boot on a new volume, which is the one moment it has to work.
-      - ${MYTHEUS_PG_INIT:-./postgres-init/prod-bootstrap.sql}:/etc/postgresql.schema.sql:ro
+      - ${MYTHEUS_PG_INIT:-/srv/mytheus/mytheus-platform/deploy/postgres-init/prod-bootstrap.sql}:/etc/postgresql.schema.sql:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -123,7 +134,7 @@ services:
     # name POSTGRES_PWD that this image expects) and handing it prod.env would also hand it
     # every Clerk, Stripe and LiveKit credential it has no business holding.
     env_file:
-      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.db.temporal.env
+      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.db.temporal.env
         required: false
     environment:
       DB: postgres12
@@ -143,9 +154,9 @@ services:
   migrate:
     <<: *backend
     env_file:
-      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
+      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
         required: false
-      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.db.migrate.env
+      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.db.migrate.env
         required: false
     command:
       - sh
@@ -185,9 +196,9 @@ services:
   relay:
     <<: *backend
     env_file:
-      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.env
+      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
         required: false
-      - path: ${MYTHEUS_ENV_DIR:-../env}/prod.db.relay.env
+      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.db.relay.env
         required: false
     command: ["python", "-m", "services.relay.main"]
     depends_on:
