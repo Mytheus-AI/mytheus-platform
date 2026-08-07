@@ -14,22 +14,29 @@
 #   MYTHEUS_ENV_DIR   directory holding prod.env + the three per-role prod.db.*.env files
 #   MYTHEUS_PG_INIT   path to the postgres post-init hook
 #
-# The defaults are ABSOLUTE host paths, not the relative ones you would expect, because a
-# relative default is unsafe here. Dokploy wipes and re-clones the working directory on every
-# deploy and rewrites its .env afterwards, leaving a window of a few seconds in which no .env
-# exists. Compose runs inside that window, reads no .env, and silently falls back to every
-# default. With relative defaults that resolved to a path containing nothing, so the env_file
-# entries (required: false, so a checkout without secrets still renders) matched nothing and
-# the backend started with no DATABASE_URL at all - reported only as `migrate` dying on
-# KeyError: 'DATABASE_URL', which points nowhere near the cause. Absolute defaults resolve
-# correctly whether or not the variables ever arrive.
+# The defaults are absolute, and specifically under /etc/dokploy/mytheus-secrets, for a
+# reason that is not obvious and cost a long debugging session.
 #
-# The consequence is that these paths are specific to this host. That is already true of this
-# whole file (it names the box above), and it is the price of a deploy tool that cannot
-# guarantee its own environment is present when it runs compose. Override both variables to
-# deploy anywhere else. Keeping the secrets on the host rather than in the deploy tool's
-# database also means re-cloning never destroys them and no credential is duplicated into
-# another system's storage.
+# Dokploy runs `docker compose` INSIDE the dokploy container, with the docker socket bind
+# mounted. The compose CLI therefore resolves every env_file path against the CONTAINER's
+# filesystem, while the resulting containers are created on the host daemon. /srv is not
+# mounted into that container, so an env_file under /srv resolves to nothing there - and
+# because these entries are `required: false` (so a checkout without secrets still renders)
+# nothing errors. compose emits services with an empty environment and the backend starts
+# with no DATABASE_URL, surfacing only as `migrate` dying on KeyError: 'DATABASE_URL'.
+#
+# Running the identical command by hand on the host succeeds, which is what makes this so
+# misleading: the host's compose sees /srv, the container's does not. The give-away is that
+# the two report different compose versions.
+#
+# /etc/dokploy is bind mounted into the dokploy container at the SAME path, so paths under it
+# resolve identically in both namespaces. That matters twice over: env_file is read by the
+# compose CLI (container side), while the MYTHEUS_PG_INIT bind mount below is handed to the
+# docker daemon as a host path (host side). Only a path valid in both can satisfy both.
+#
+# Secrets stay on the host and are never copied into Dokploy's database, so re-cloning cannot
+# destroy them and no credential is duplicated into another system's storage. Override both
+# variables to deploy anywhere else.
 #
 # Bring up:  POSTGRES_PASSWORD=... docker compose -f compose.prod.yml up -d
 # Validate:  docker compose -f compose.prod.yml config
@@ -54,7 +61,7 @@ x-backend: &backend
   image: ${BACKEND_IMAGE:-ghcr.io/mytheus-ai/mytheus-backend:main}
   pull_policy: always
   env_file:
-    - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
+    - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
       required: false
   restart: unless-stopped
 
@@ -62,9 +69,9 @@ x-backend: &backend
 x-backend-app: &backend-app
   <<: *backend
   env_file:
-    - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
+    - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
       required: false
-    - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.db.app.env
+    - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.app.env
       required: false
 
 services:
@@ -77,7 +84,7 @@ services:
     # in plaintext to any holder of an API key. Reading it from the host file instead keeps
     # the strongest credential in the stack out of that blast radius.
     env_file:
-      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
         required: false
     volumes:
       # Path is a variable for the same reason MYTHEUS_ENV_DIR is: this file holds the postgres
@@ -86,7 +93,7 @@ services:
       # DIRECTORY at the mount point. That is invisible today because the hook only runs against
       # an uninitialised data directory and pgdata already exists, but it would break the first
       # boot on a new volume, which is the one moment it has to work.
-      - ${MYTHEUS_PG_INIT:-/srv/mytheus/mytheus-platform/deploy/postgres-init/prod-bootstrap.sql}:/etc/postgresql.schema.sql:ro
+      - ${MYTHEUS_PG_INIT:-/etc/dokploy/mytheus-secrets/prod-bootstrap.sql}:/etc/postgresql.schema.sql:ro
       - pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres"]
@@ -134,7 +141,7 @@ services:
     # name POSTGRES_PWD that this image expects) and handing it prod.env would also hand it
     # every Clerk, Stripe and LiveKit credential it has no business holding.
     env_file:
-      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.db.temporal.env
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.temporal.env
         required: false
     environment:
       DB: postgres12
@@ -154,9 +161,9 @@ services:
   migrate:
     <<: *backend
     env_file:
-      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
         required: false
-      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.db.migrate.env
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.migrate.env
         required: false
     command:
       - sh
@@ -196,9 +203,9 @@ services:
   relay:
     <<: *backend
     env_file:
-      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.env
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
         required: false
-      - path: ${MYTHEUS_ENV_DIR:-/srv/mytheus/mytheus-platform/env}/prod.db.relay.env
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.relay.env
         required: false
     command: ["python", "-m", "services.relay.main"]
     depends_on:
