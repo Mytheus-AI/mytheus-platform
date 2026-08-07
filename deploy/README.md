@@ -68,6 +68,35 @@ $EDITOR env/prod.db.relay.env        # mytheus_relay, with the password set abov
 cd deploy && ./deploy.sh
 ```
 
+## Clerk JWT template (required before the AI tier works)
+
+`mytheus-intelligence` authorizes every request from an `internal_org_id` claim carrying the
+resolved internal `org_id` (a UUID), never Clerk's opaque `org_...` id. It reads a claim rather
+than joining `public.organizations` deliberately: that table belongs to `mytheus-backend`'s
+bounded context.
+
+`identity-tenant-service` publishes the value into the organization's `public_metadata` at
+provisioning time (`libs/shared/clerk_admin.py`). Clerk does **not** put `public_metadata` into
+session tokens on its own, so one dashboard step is still required:
+
+1. Clerk dashboard -> Sessions -> Customize session token.
+2. Add a claim: `"internal_org_id": "{{org.public_metadata.internal_org_id}}"`.
+
+Without it the claim is absent from every token and the AI tier fails closed with 401 on every
+request, while the backend keeps working, so the symptom looks like an AI-tier outage rather
+than a configuration gap. `CLERK_SECRET_KEY` in `env/prod.env` must also be a real key; with a
+placeholder the publish is a logged no-op and the metadata is never written.
+
+Verify a provisioned tenant end to end:
+
+```bash
+# the metadata was published
+curl -s -H "Authorization: Bearer $CLERK_SECRET_KEY" \
+  https://api.clerk.com/v1/organizations/<clerk_org_id> | jq .public_metadata
+# and the tenant is resolvable, which is what clerk_org_id exists for
+psql -c "SELECT id, clerk_org_id FROM organizations WHERE clerk_org_id IS NOT NULL;"
+```
+
 ## Verify
 
 ```bash
