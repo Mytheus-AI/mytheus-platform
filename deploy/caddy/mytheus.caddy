@@ -1,0 +1,40 @@
+# Mytheus ingress. Owned by THIS repo, served by a Caddy this repo does not own.
+#
+# The box runs one Caddy (the atithivishram-prod stack). It holds 80/443, and cf-origin-lock
+# admits Cloudflare traffic only to those ports, so a second TLS terminator is not possible.
+# For a while the Mytheus site blocks therefore lived inside that other product's Caddyfile,
+# which meant changing Mytheus routing meant editing atithivishram-infra, and a Mytheus deploy
+# could not change its own ingress.
+#
+# This file is the decoupling. atithivishram-infra carries one permanent line -
+# `import /etc/caddy/conf.d/*.caddy` - plus a read-only mount of /srv/mytheus/caddy/conf.d.
+# Everything Mytheus-specific lives here and is deployed by mytheus-deploy.sh.
+#
+# Two constraints this file must respect, because breaking either takes down a product that
+# is not ours:
+#
+#   1. It is spliced into another product's config. A syntax error here fails validation of
+#      the WHOLE Caddyfile, Atithi's five domains included. mytheus-deploy.sh therefore runs
+#      `caddy validate` and refuses to reload if this file does not parse.
+#   2. Only ever define mytheus.cloud site blocks here. A block for a hostname this repo does
+#      not own would silently take over that hostname from its real definition.
+#
+# `tls internal` rather than an ACME certificate: cf-origin-lock drops non-Cloudflare ingress
+# on 80, so an HTTP-01 challenge can never complete. This requires the mytheus.cloud zone to
+# stay on Cloudflare SSL mode Full; Full (strict) rejects an internally-issued cert.
+
+vps.mytheus.cloud {
+	encode zstd gzip
+	reverse_proxy dokploy:3000
+	tls internal
+}
+
+api.mytheus.cloud {
+	encode zstd gzip
+	# api-gateway, not core-api directly. The gateway pre-validates the Clerk token, resolves
+	# the tenant once, and FAILS CLOSED before any tenant-scoped store is touched; pointing
+	# this at a service bypasses that checkpoint entirely. It also owns routing, so every
+	# service other than core-api is unreachable if this names a single service.
+	reverse_proxy api-gateway:8000
+	tls internal
+}
