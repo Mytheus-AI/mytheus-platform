@@ -1,0 +1,79 @@
+name: deploy
+
+# Continuous deployment for the VPS stack.
+#
+# Fires when the deploy descriptor changes here. A new backend IMAGE does not trigger this
+# workflow: mytheus-backend runs the identical deploy step itself once its own gates are green
+# (see that repo's ci.yml). Doing it there rather than by repository_dispatch avoids a
+# cross-repo PAT entirely - GITHUB_TOKEN cannot dispatch to another repository, so the
+# alternative would have meant creating and storing a long-lived personal token whose only
+# job is to say "deploy now". Both repos hold the same forced-command SSH key instead, which
+# grants strictly less.
+#
+# workflow_dispatch is kept for a manual redeploy or a rollback.
+#
+# The job does not build, template, or reason about the stack. It opens one SSH connection and
+# the server does the rest: the key installed on the VPS carries a forced command
+# (/usr/local/sbin/mytheus-deploy.sh), so this credential CANNOT run anything else - not a
+# shell, not a different script, not port forwarding. A leaked VPS_DEPLOY_KEY buys an attacker
+# a redeploy of the current main, and nothing more. That is why no secret beyond the SSH key
+# is needed here: every credential the stack uses lives on the host and is never handed to CI.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'deploy/**'
+      - 'docker-compose.yml'
+      - '.github/workflows/deploy.yml'
+  workflow_dispatch: {}
+
+# One deploy at a time. Two concurrent runs would race `docker compose up` against the same
+# project and could interleave a rollout with a rollback. Queued rather than cancelled: a
+# superseded deploy still needs to finish rather than leave the stack half-converged.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: configure ssh
+        run: |
+          mkdir -p ~/.ssh && chmod 700 ~/.ssh
+          printf '%s\n' "${{ secrets.VPS_DEPLOY_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pinned host key, not accept-new: accept-new trusts whatever answers on the first
+          # connection, which is exactly the moment a man-in-the-middle would be useful.
+          printf '%s\n' "${{ secrets.VPS_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: deploy
+        run: |
+          ssh -i ~/.ssh/deploy_key \
+              -o BatchMode=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile=~/.ssh/known_hosts \
+              -o ConnectTimeout=30 \
+              root@${{ secrets.VPS_HOST }}
+          # No command argument on purpose: the forced command in authorized_keys decides what
+          # runs. Passing one here would be ignored, so writing one would be a lie about what
+          # this step does.
+
+      - name: verify the deployed API actually serves traffic
+        # The deploy script already waits for the container healthcheck. This checks the
+        # public path as well - Cloudflare, the Caddy that fronts 443, and the docker network
+        # between them - so a green deploy cannot mean "container is up but nobody can reach
+        # it", which is a failure mode a container-local healthcheck cannot see.
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /tmp/body -m 20 -w '%{http_code}' https://api.mytheus.cloud/healthz || echo 000)
+            if [ "$code" = "200" ]; then
+              echo "healthz OK: $(cat /tmp/body)"; exit 0
+            fi
+            echo "attempt $i: HTTP $code"; sleep 10
+          done
+          echo "::error::api.mytheus.cloud/healthz did not return 200 after the deploy"
+          exit 1
