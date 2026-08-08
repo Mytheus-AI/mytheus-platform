@@ -346,6 +346,19 @@ services:
   ui:
     image: ${UI_IMAGE:-ghcr.io/mytheus-ai/mytheus-ui:main}
     pull_policy: always
+    # Explicit, namespaced alias. Compose derives an alias from the service key, so this was
+    # reachable as plain `ui` - and so is atithivishram-prod's own `ui` container. The Caddy
+    # that fronts 443 is attached to BOTH stacks' networks, so `ui` was ambiguous there and
+    # resolved to Atithi's container: mytheus.cloud served their product, not ours. Caught by
+    # checking the served page title rather than trusting a 200.
+    #
+    # `redis` and `postgres` are ambiguous across the two stacks for the same reason. They are
+    # harmless because only Caddy spans networks and it never proxies to them; every other
+    # container resolves names inside its own network. Anything Caddy must reach needs a name
+    # that is unique across all three.
+    networks:
+      default:
+        aliases: ["mytheus-webapp"]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.ui.env
         required: false

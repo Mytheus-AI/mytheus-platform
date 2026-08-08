@@ -30,7 +30,11 @@
 # the host that set them and bouncing between the two mid-flow drops the session.
 mytheus.cloud, www.mytheus.cloud {
 	encode zstd gzip
-	reverse_proxy ui:3000
+	# `mytheus-webapp`, not `ui`. This Caddy is attached to both stacks' networks and
+	# atithivishram-prod also has a container aliased `ui`, so the bare name resolved to THEIR
+	# container and this host served their product. Any upstream named here must be unique
+	# across every network this Caddy is on.
+	reverse_proxy mytheus-webapp:3000
 	tls internal
 }
 
