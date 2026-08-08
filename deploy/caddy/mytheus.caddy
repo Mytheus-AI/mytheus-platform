@@ -23,6 +23,17 @@
 # on 80, so an HTTP-01 challenge can never complete. This requires the mytheus.cloud zone to
 # stay on Cloudflare SSL mode Full; Full (strict) rejects an internally-issued cert.
 
+# The web application: marketing at /, the authenticated shell at /dashboard and below, the
+# meeting room under /meetings. One Next.js app with route groups (doc 20 section 2.2), so the
+# marketing site is a path inside it and not a separate origin. Both the apex and www are
+# served rather than one redirecting to the other, because Clerk session cookies are scoped to
+# the host that set them and bouncing between the two mid-flow drops the session.
+mytheus.cloud, www.mytheus.cloud {
+	encode zstd gzip
+	reverse_proxy ui:3000
+	tls internal
+}
+
 vps.mytheus.cloud {
 	encode zstd gzip
 	reverse_proxy dokploy:3000

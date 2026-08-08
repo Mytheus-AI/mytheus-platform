@@ -335,6 +335,40 @@ services:
       migrate:
         condition: service_completed_successfully
 
+  # The web application: marketing, the authenticated app shell, and the meeting room. One
+  # Next.js app with route groups, per doc 20 section 2.2 - the marketing site is NOT a
+  # separate deployable.
+  #
+  # Deliberately NOT on the *backend anchors. It holds no database credential and never talks
+  # to Postgres: every read goes through the gateway over HTTP, which is what keeps org_id
+  # derivation at the edge rather than in the browser tier. Giving it prod.env would hand a
+  # public-facing Node process the database URLs, Stripe and LiveKit secrets.
+  ui:
+    image: ${UI_IMAGE:-ghcr.io/mytheus-ai/mytheus-ui:main}
+    pull_policy: always
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.ui.env
+        required: false
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+    healthcheck:
+      # Hits 127.0.0.1, not localhost: the Next standalone server binds IPv4 only, and on
+      # this image `localhost` resolves to ::1 first, so a localhost probe never connects and
+      # the container is marked unhealthy while serving perfectly.
+      test:
+        - CMD
+        - wget
+        - -qO-
+        - http://127.0.0.1:3000/
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    expose:
+      - "3000"
+    restart: unless-stopped
+
   # No TLS terminator here on purpose. This box already runs one Caddy (the
   # atithivishram-prod stack) holding 80/443, and it is the only listener the host's
   # cf-origin-lock admits Cloudflare traffic to. That Caddy terminates api.mytheus.cloud and
