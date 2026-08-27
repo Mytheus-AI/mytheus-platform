@@ -36,13 +36,27 @@ git -C .. pull --ff-only || true
 echo "==> Pulling images + starting the stack"
 docker compose -f compose.prod.yml up -d --pull always
 
-echo "==> Waiting for the web healthcheck"
-for i in $(seq 1 30); do
-  status="$(docker inspect --format '{{ .State.Health.Status }}' mytheus-web-1 2>/dev/null || echo starting)"
-  echo "   web health: $status"
-  [[ "$status" == "healthy" ]] && break
-  sleep 5
-done
+# Hard gate, not a best-effort wait. The previous version looped 30 times on `web` and then
+# fell through to "Done." whatever the outcome, so a container that never became healthy still
+# produced a deploy that reported success. `set -e` cannot catch that: the loop itself exits 0.
+wait_healthy() {
+  local container="$1" status
+  echo "==> Waiting for $container to become healthy"
+  for _ in $(seq 1 30); do
+    status="$(docker inspect --format '{{ .State.Health.Status }}' "$container" 2>/dev/null || echo missing)"
+    echo "   $container: $status"
+    [[ "$status" == "healthy" ]] && return 0
+    sleep 5
+  done
+  echo "ERROR: $container did not become healthy within 150s." >&2
+  docker logs --tail 50 "$container" 2>&1 | sed 's/^/   | /' >&2 || true
+  return 1
+}
+
+# `meeting-service` is gated for the reason spelled out beside its healthcheck in
+# compose.prod.yml: nothing anywhere else in the pipeline notices when it fails to come up.
+wait_healthy mytheus-web-1
+wait_healthy mytheus-meeting-service-1
 
 echo "==> Current state"
 docker compose -f compose.prod.yml ps

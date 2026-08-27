@@ -296,6 +296,24 @@ services:
     depends_on:
       migrate:
         condition: service_completed_successfully
+    # Identical to `web`'s probe. Until this existed, meeting-service was the only route the
+    # gateway proxies (`/api/meetings`, `/livekit/webhook`) whose liveness NOTHING checked:
+    # `deploy.sh` waited on `mytheus-web-1` alone and mytheus-backend's CI verifies only
+    # `api.mytheus.cloud/healthz`, which the gateway answers. A merge that broke this service
+    # therefore built green, deployed green and went silently dark - and an unauthenticated
+    # probe cannot substitute, because the gateway raises 401 AUTH_REQUIRED before it ever
+    # proxies upstream (`services/api_gateway/edge.py`), so a 401 proves only the gateway is up.
+    # Declaring it here rather than on the `x-backend-app` anchor keeps this change to the one
+    # service it was scoped to; extending it to the other uvicorn apps is a follow-up.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz').status==200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   # These four currently expose no routes beyond /healthz - they are scaffolds whose bands have
   # not landed. Deployed anyway so the topology is complete and the gateway's route map has a
