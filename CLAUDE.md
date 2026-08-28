@@ -47,6 +47,7 @@ Managed planes wired here (this repo provisions and wires them; app repos consum
 | Relational store of record | Supabase Postgres (primary + read replica + PITR) | `data` |
 | Vector store | Qdrant Cloud (per-tenant collections, `org_id` payload filter) | `data` |
 | Cache / pub-sub / queues | Upstash Redis (`nexus:{org_id}:` prefix, ephemeral) | `data` |
+| Object storage | **Cloudflare R2** (S3-compatible; `nexus-recordings`, `nexus-documents`, `nexus-audit-archive`, `nexus-invoices`, `nexus-exports`, each `{org_id}/` prefixed) | `data` (the bucket is a store, even though Cloudflare's CDN/WAF is `edge`) |
 | Event backbone | Redpanda + Schema Registry (BYOC, tenant-partitioned, Avro BACKWARD) | `data` |
 | Durable execution | Temporal Cloud namespace | `data` |
 | Identity | Clerk (SSO/SAML/SCIM) | `secrets` + service config |
