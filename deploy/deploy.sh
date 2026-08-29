@@ -58,6 +58,53 @@ wait_healthy() {
 wait_healthy mytheus-web-1
 wait_healthy mytheus-meeting-service-1
 
+# The event backbone is VERIFIED here, not created here.
+#
+# Creating it would mean a second copy of the topic list living in this repo, and the canonical
+# one is `mytheus-events/scripts/create_topics.sh` (itself derived from
+# `_canon/03-event-taxonomy.md`). This repo already has one vendored script that has drifted
+# from its origin, so a second copy of 42 partition counts and retention settings is a defect
+# waiting to happen: the drift would be silent and would land as wrong retention on production
+# topics.
+#
+# Verifying instead gets the property that actually matters. It does not care HOW the topics
+# were created, only that a deploy cannot report success while the backbone is missing. Before
+# this, a fresh stack came up with zero topics and every producer either auto-created a
+# 1-partition topic with default retention or failed at runtime, and `deploy.sh` said "Done."
+#
+# Counts, not names, for the same one-definition reason: 21 topics plus their 21 paired .dlq is
+# 42, and one `{topic}-value` subject each is 21. Redpanda's own internal topics are excluded.
+verify_event_backbone() {
+  local topics subjects
+  echo "==> Verifying the event backbone"
+
+  topics="$(docker compose -f compose.prod.yml exec -T redpanda     rpk topic list 2>/dev/null | tail -n +2 | grep -cvE '^(_schemas|__consumer_offsets|_redpanda)' || true)"
+  subjects="$(docker compose -f compose.prod.yml exec -T redpanda     curl -sf http://localhost:8081/subjects 2>/dev/null | grep -o '"' | wc -l || true)"
+  subjects=$(( subjects / 2 ))
+
+  echo "   topics: ${topics}/42   subjects: ${subjects}/21"
+
+  if [[ "${topics:-0}" -lt 42 || "${subjects:-0}" -lt 21 ]]; then
+    cat >&2 <<'UNPROVISIONED'
+ERROR: the Redpanda topics and/or Avro subjects are not provisioned.
+
+Producers would auto-create single-partition topics with default retention, which silently
+loses the canonical partition counts and retention from _canon/03-event-taxonomy.md, or fail
+outright where auto-creation is disabled. Refusing to report a successful deploy.
+
+To provision, from a mytheus-events checkout with rpk and a Schema Registry reachable:
+
+    BROKERS=<broker>:9092 bash scripts/create_topics.sh
+    make register SR_URL=http://<host>:8081
+
+Both are idempotent and safe to re-run.
+UNPROVISIONED
+    return 1
+  fi
+}
+
+verify_event_backbone
+
 echo "==> Current state"
 docker compose -f compose.prod.yml ps
 echo "Done. /healthz is served on https://${PUBLIC_HOSTNAME:-api.mytheus.cloud}/healthz"
