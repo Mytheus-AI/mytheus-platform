@@ -184,7 +184,7 @@ tfsec terraform/ && checkov -d terraform/
 
 ## Working with other repos
 
-This repo deploys, but does not own, the application repos: `mytheus-web` (`web-app`, `bff`, `api-gateway`), `mytheus-core-api` (CRUD/control plane), `mytheus-realtime` (`realtime-gateway`, `transcription-service`), `mytheus` (AI/inference tier), `mytheus-workflows` (`workflow-service`), and `mytheus-sdk`. It wires the `mytheus-events` / Redpanda Schema Registry. App repos own their own Dockerfiles, lint/test, and code; this repo owns the deploy substrate, rollout policy, and image promotion. Naming authority is `mytheus-docs` `_canon/`.
+This repo deploys, but does not own, the application repos: `mytheus-backend` (`api-gateway`, `bff`, `core-api`, `identity-tenant-service`, `meeting-service`, `billing-metering-service`, `integration-service`, `admin-ops-service`, `notification-service`, `workflow-service`), `mytheus-realtime` (`realtime-gateway`, `transcription-service`), `mytheus-intelligence` (the AI/inference tier), `mytheus-events` (Avro schemas and the topic taxonomy), and the two clients `mytheus-ui` and `mytheus-mobile`. The authoritative repo list is the table in `mytheus-docs/CLAUDE.md`.
 
 ## Commit and PR conventions
 

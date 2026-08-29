@@ -96,16 +96,18 @@ Production placement composes along three axes - **region × environment × cell
 
 ## Related repos
 
-`mytheus-platform` deploys the other Mytheus repos. The full set (8):
+`mytheus-platform` deploys the other Mytheus repos. The full set (8, plus one reference-only repo):
 
-1. **`mytheus-platform`** - this repo: IaC, Kubernetes, CI/CD, observability, DR.
+1. **`mytheus-platform`** - this repo: the Compose/deploy substrate, CI templates, deploy scripts. The Terraform, Helm and k8s trees described elsewhere in this repo do not exist yet.
 2. **`mytheus-docs`** - architecture canon and the frozen `_canon/` naming authority (service, topic, and store names).
-3. **`mytheus-core-api`** - CRUD / control-plane services (`core-api`, `identity-tenant-service`, `meeting-service`, `billing-metering-service`, `integration-service`, `admin-ops-service`, `notification-service`).
+3. **`mytheus-backend`** - CRUD / control plane plus async orchestration: `api-gateway`, `bff`, `core-api`, `identity-tenant-service`, `meeting-service`, `billing-metering-service`, `integration-service`, `admin-ops-service`, `notification-service`, `workflow-service`.
 4. **`mytheus-realtime`** - real-time tier (`realtime-gateway`, `transcription-service`).
-5. **`mytheus`** - AI / inference tier (`agent-runtime-service`, `embedding-service`, `reranker-service`, `rag-service`, `ingestion-service`, `knowledge-graph-service`, `search-service`).
-6. **`mytheus-workflows`** - async orchestration (`workflow-service`, Temporal workers).
-7. **`mytheus-web`** - `web-app` (Next.js 14) and the `bff`/`api-gateway` edge.
-8. **`mytheus-sdk`** - shared client/SDK and contracts.
+5. **`mytheus-intelligence`** - AI / inference tier (`agent-runtime-service`, `embedding-service`, `reranker-service`, `rag-service`, `ingestion-service`, `knowledge-graph-service`, `search-service`).
+6. **`mytheus-events`** - Avro schemas, the topic taxonomy, and Schema Registry contracts.
+7. **`mytheus-ui`** - `web-app` (Next.js 14), the canonical web client.
+8. **`mytheus-mobile`** - the Expo / React Native client.
+
+`mytheus-web` is reference-only: a Next.js draft of the meeting UI, not a build target and not deployed.
 
 Service, topic, and store names are owned by `mytheus-docs` `_canon/`. This repo deploys them under those exact names - it never renames anything.
 
