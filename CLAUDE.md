@@ -49,7 +49,7 @@ Managed planes wired here (this repo provisions and wires them; app repos consum
 | Relational store of record | Supabase Postgres (primary + read replica + PITR) | `data` |
 | Vector store | Qdrant Cloud (per-tenant collections, `org_id` payload filter) | `data` |
 | Cache / pub-sub / queues | Upstash Redis (`nexus:{org_id}:` prefix, ephemeral) | `data` |
-| Object storage | **Cloudflare R2** (S3-compatible; `nexus-recordings`, `nexus-documents`, `nexus-audit-archive`, `nexus-invoices`, `nexus-exports`, each `{org_id}/` prefixed) | `data` (the bucket is a store, even though Cloudflare's CDN/WAF is `edge`) |
+| Object storage | **Cloudflare R2** (S3-compatible; `mytheus-recordings`, `mytheus-documents`, `mytheus-audit-archive`, `mytheus-invoices`, `mytheus-exports`, each `{org_id}/` prefixed) | `data` (the bucket is a store, even though Cloudflare's CDN/WAF is `edge`) |
 | Event backbone | Redpanda + Schema Registry (BYOC, tenant-partitioned, Avro BACKWARD) | `data` |
 | Durable execution | Temporal Cloud namespace | `data` |
 | Identity | Clerk (SSO/SAML/SCIM) | `secrets` + service config |
@@ -105,7 +105,7 @@ DR specifics that are intentional, not bugs: active-passive evolving to active-a
 
 ## Naming authority
 
-Service names, topic names, store names, bucket names (`nexus-recordings`, `nexus-documents`, `nexus-audit`, ...), the AGE graph `nexus_knowledge`, and the `nexus:{org_id}:` Redis prefix are frozen in `mytheus-docs` `_canon/` (`01-service-catalog.md`, `02-data-model.md`, `03-event-taxonomy.md`). Deploy everything under those exact names. Never rename a service in a manifest, invent a topic or bucket, or introduce an alias. If a name seems wrong, the fix lands in `_canon/` first via ADR, then propagates here, never the reverse.
+Service names, topic names, store names, bucket names (`mytheus-recordings`, `mytheus-documents`, `mytheus-audit-archive`, ...), the AGE graph `nexus_knowledge`, and the `nexus:{org_id}:` Redis prefix are frozen in `mytheus-docs` `_canon/` (`01-service-catalog.md`, `02-data-model.md`, `03-event-taxonomy.md`). Deploy everything under those exact names. Never rename a service in a manifest, invent a topic or bucket, or introduce an alias. If a name seems wrong, the fix lands in `_canon/` first via ADR, then propagates here, never the reverse.
 
 ## Common tasks (recipes)
 
