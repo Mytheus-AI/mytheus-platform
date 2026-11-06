@@ -57,6 +57,24 @@ for f in "${required[@]}"; do
 done
 [[ -s "$ENV_DIR/prod-bootstrap.sql" ]] || die "missing $ENV_DIR/prod-bootstrap.sql"
 
+# Key custody (mytheus-docs ADR-0026). The same rules FileKeyProvider enforces at startup,
+# checked here so a bad key file stops the deploy instead of crash-looping
+# identity-tenant-service after `up`. Content is never printed.
+KEYS_DIR="${MYTHEUS_KEYS_DIR:-/etc/dokploy/mytheus-secrets/keys}"
+KEY_UID="${MYTHEUS_KEY_UID:-10001}"   # appuser in the mytheus-backend image
+log "Checking key files in $KEYS_DIR"
+for k in mytheus_kek mytheus_blind_index_key; do
+  p="$KEYS_DIR/$k"
+  [[ -f "$p" && ! -L "$p" ]] || die "missing key file (or not a regular file): $p"
+  [[ -s "$p" ]] || die "empty key file: $p"
+  mode="$(stat -c '%a' "$p")"
+  [[ "$mode" == "400" || "$mode" == "600" ]] || die "key file $p has mode $mode; must be 0400 or 0600"
+  owner="$(stat -c '%u' "$p")"
+  [[ "$owner" == "$KEY_UID" ]] || die "key file $p is owned by uid $owner; must be $KEY_UID"
+  len="$(tr -d '[:space:]' <"$p" | base64 -d 2>/dev/null | wc -c | tr -d ' ')" || len=0
+  [[ "$len" == "32" ]] || die "key file $p does not hold base64 of exactly 32 bytes"
+done
+
 # The rendered config must actually carry DATABASE_URL for web, relay, workflow, migrate
 # (the failure mode that cost a debugging session: env_file silently resolving to nothing).
 cfg="$("${COMPOSE[@]}" config --format json)"
