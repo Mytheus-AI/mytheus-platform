@@ -1,21 +1,18 @@
 # Prometheus scrape config. Internal-only; see deploy/compose.prod.yml (profile: observability).
 #
-# Metric names are the contract in mytheus-backend/design/metrics.md. That file did not exist
-# when this was written, so these names are ASSUMED and must be reconciled with it:
-#   http_request_duration_seconds   histogram, label `status` (HTTP code) assumed
-#   consumer_lag_seconds            gauge, labels `group`, `topic` assumed
-#   messages_processed_total        counter
-#   dlq_total                       counter
-#   outbox_backlog                  gauge
-#   embedding_batch_duration_seconds  histogram  (NOT in the agreed list - invented here)
-#
-# Targets are the services' HTTP apps. The queue workers (embedding-worker, ingestion-worker,
-# search-worker, embedding-relay) serve no HTTP port today, so they are not scraped; lag/DLQ
-# metrics must be exposed by a service on the list below or workers need a metrics port.
+# Metric names are the contract in mytheus-backend/design/metrics.md (all prefixed `mytheus_`).
+# HTTP services expose /metrics on their port. Queue workers / relays expose a standalone
+# exporter only when METRICS_PORT is set; compose.prod.yml sets it (9100) and the `workers` job
+# below scrapes it. The Temporal `workflow` worker has no exporter and is not scraped.
 # A target that serves no /metrics shows up as `up == 0` (alert: TargetDown, warning only).
 global:
   scrape_interval: 15s
   evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
 
 rule_files:
   - /etc/prometheus/alerts.yml
@@ -70,3 +67,22 @@ scrape_configs:
       - source_labels: [__address__]
         regex: "([^:]+):.*"
         target_label: service
+
+  # Non-HTTP workers (METRICS_PORT=9100 in compose.prod.yml). relay is in the default profile;
+  # the rest only exist with profile `intelligence`.
+  - job_name: workers
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - relay:9100
+          - embedding-worker:9100
+          - embedding-relay:9100
+          - ingestion-worker:9100
+          - search-worker:9100
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: service
+
+  - job_name: alertmanager
+    static_configs: [{ targets: ["alertmanager:9093"] }]

@@ -251,6 +251,8 @@ services:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.relay.env
         required: false
     command: ["python", "-m", "services.relay.main"]
+    environment:
+      METRICS_PORT: "9100"
     depends_on:
       web:
         condition: service_started
@@ -547,6 +549,7 @@ services:
     command: ["python", "-m", "services.embedding_service.worker"]
     environment:
       EMBEDDING_GPU: "0"
+      METRICS_PORT: "9100"
     depends_on:
       qdrant:
         condition: service_healthy
@@ -567,6 +570,8 @@ services:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai-relay.env
         required: false
     command: ["python", "-m", "services.embedding_service.relay_main"]
+    environment:
+      METRICS_PORT: "9100"
     depends_on:
       redpanda:
         condition: service_healthy
@@ -628,6 +633,8 @@ services:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.ingestion.env
         required: false
     command: ["python", "-m", "services.ingestion_service.worker"]
+    environment:
+      METRICS_PORT: "9100"
     depends_on:
       redpanda:
         condition: service_healthy
@@ -676,6 +683,8 @@ services:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.search.env
         required: false
     command: ["python", "-m", "services.search_service.worker"]
+    environment:
+      METRICS_PORT: "9100"
     depends_on:
       qdrant:
         condition: service_healthy
@@ -822,6 +831,9 @@ services:
     volumes:
       - ${MYTHEUS_OBS_DIR:-../observability}/prometheus:/etc/prometheus:ro
       - prometheusdata:/prometheus
+    depends_on:
+      alertmanager:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
       interval: 15s
@@ -829,6 +841,26 @@ services:
       retries: 10
     expose:
       - "9090"
+    restart: unless-stopped
+
+  # Receives Prometheus alerts. Default receiver is a null sink (no notification credentials in
+  # this repo); add a real receiver in alertmanager.yml / a mounted override when decided.
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ${MYTHEUS_OBS_DIR:-../observability}/alertmanager:/etc/alertmanager:ro
+      - alertmanagerdata:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "9093"
     restart: unless-stopped
 
   grafana:
@@ -865,4 +897,5 @@ volumes:
   redpandadata:
   qdrantdata:
   prometheusdata:
+  alertmanagerdata:
   grafanadata:

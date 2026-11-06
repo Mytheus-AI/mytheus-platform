@@ -37,7 +37,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (service, group, topic) (consumer_lag_seconds)",
+          "expr": "max by (service, group, topic) (mytheus_consumer_lag_seconds)",
           "legendFormat": "{{service}} {{group}}/{{topic}}",
           "datasource": {
             "type": "prometheus",
@@ -70,7 +70,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service, topic) (rate(dlq_total[5m])) * 60",
+          "expr": "sum by (service, topic) (rate(mytheus_consumer_dlq_total[5m])) * 60",
           "legendFormat": "{{service}} {{topic}}",
           "datasource": {
             "type": "prometheus",
@@ -103,7 +103,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "max by (service) (outbox_backlog)",
+          "expr": "max by (service) (mytheus_outbox_backlog)",
           "legendFormat": "{{service}}",
           "datasource": {
             "type": "prometheus",
@@ -136,7 +136,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service, topic) (rate(messages_processed_total[5m]))",
+          "expr": "sum by (service, topic) (rate(mytheus_consumer_messages_processed_total[5m]))",
           "legendFormat": "{{service}} {{topic}}",
           "datasource": {
             "type": "prometheus",

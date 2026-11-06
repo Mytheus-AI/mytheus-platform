@@ -37,7 +37,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le, service) (rate(mytheus_http_request_duration_seconds_bucket[5m])))",
           "legendFormat": "p50 {{service}}",
           "datasource": {
             "type": "prometheus",
@@ -46,7 +46,7 @@
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le, service) (rate(mytheus_http_request_duration_seconds_bucket[5m])))",
           "legendFormat": "p95 {{service}}",
           "datasource": {
             "type": "prometheus",
@@ -55,7 +55,7 @@
         },
         {
           "refId": "C",
-          "expr": "histogram_quantile(0.99, sum by (le, service) (rate(http_request_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.99, sum by (le, service) (rate(mytheus_http_request_duration_seconds_bucket[5m])))",
           "legendFormat": "p99 {{service}}",
           "datasource": {
             "type": "prometheus",
@@ -88,7 +88,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service) (rate(http_request_duration_seconds_count[5m]))",
+          "expr": "sum by (service) (rate(mytheus_http_requests_total[5m]))",
           "legendFormat": "{{service}}",
           "datasource": {
             "type": "prometheus",
@@ -101,7 +101,7 @@
       "id": 3,
       "type": "timeseries",
       "title": "5xx error ratio",
-      "description": "Assumes a `status` label on the histogram.",
+      "description": "mytheus_http_requests_total{status=~\"5..\"} / all requests (status label lives on the counter, not the histogram).",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -121,7 +121,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (service) (rate(http_request_duration_seconds_count{status=~\"5..\"}[5m])) / sum by (service) (rate(http_request_duration_seconds_count[5m]))",
+          "expr": "sum by (service) (rate(mytheus_http_requests_total{status=~\"5..\"}[5m])) / sum by (service) (rate(mytheus_http_requests_total[5m]))",
           "legendFormat": "{{service}}",
           "datasource": {
             "type": "prometheus",
@@ -154,7 +154,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "histogram_quantile(0.5, sum by (le) (rate(embedding_batch_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(mytheus_embedding_batch_duration_seconds_bucket[5m])))",
           "legendFormat": "p50",
           "datasource": {
             "type": "prometheus",
@@ -163,7 +163,7 @@
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(embedding_batch_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(mytheus_embedding_batch_duration_seconds_bucket[5m])))",
           "legendFormat": "p95",
           "datasource": {
             "type": "prometheus",
