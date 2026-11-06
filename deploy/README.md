@@ -154,8 +154,8 @@ environment. `ner` and `kg` are separate profiles (disabled unless named).
 | `realtime` | realtime-gateway, transcription-service | 8090 / 8091 |
 | `observability` | prometheus, grafana | 9090 / 3000 (internal only) |
 
-- **Backend consumers + audio tap (default profile, no published ports, METRICS_PORT=9100 scraped by the
-  Prometheus `workers` job):** `core-api-consumer`, `meeting-consumer`, `audio-tap-worker`. Each has its own
+- **Backend consumers + audio tap (opt-in: `--profile workers`, because each needs credentials that a
+  fresh server does not have; no published ports, METRICS_PORT=9100 scraped by the Prometheus `workers` job):** `core-api-consumer`, `meeting-consumer`, `audio-tap-worker`. Each has its own
   env file layered on `prod.env`: `prod.db.core-consumer.env`, `prod.db.meeting-consumer.env` (each its own
   `DATABASE_URL`) and `prod.audio-tap.env` (`INTERNAL_AUDIO_TOKEN`, no DB; must match transcription-service).
   `meeting-service` runs with `AUDIO_TAP_MODE=worker` so the API process never taps audio; the dedicated worker

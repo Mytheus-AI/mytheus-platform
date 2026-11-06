@@ -386,6 +386,8 @@ services:
   # METRICS_PORT=9100 is scraped by the `workers` job; there is no HTTP port, so no healthcheck.
   core-api-consumer:
     <<: *backend
+    # Opt-in (`--profile workers`): Needs the prod.db.core-consumer.env database role. Without them it would crash-loop on a plain `up`.
+    profiles: [workers]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
         required: false
@@ -402,6 +404,8 @@ services:
 
   meeting-consumer:
     <<: *backend
+    # Opt-in (`--profile workers`): Needs the prod.db.meeting-consumer.env database role. Without them it would crash-loop on a plain `up`.
+    profiles: [workers]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
         required: false
@@ -423,6 +427,8 @@ services:
   # profile this worker retries its connection; enable `realtime` together with this.
   audio-tap-worker:
     <<: *backend
+    # Opt-in (`--profile workers`): Needs LiveKit credentials, INTERNAL_AUDIO_TOKEN and the realtime tier. Without them it would crash-loop on a plain `up`.
+    profiles: [workers]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
         required: false
