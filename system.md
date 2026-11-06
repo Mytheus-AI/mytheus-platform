@@ -127,7 +127,7 @@ Terraform Cloud is the single control plane for all cloud-provider state; nothin
 | Meeting transport | **LiveKit** (self-hostable SFU behind a transport adapter) | `secrets` + service config |
 | Transcription | **Deepgram** (WS proxy, server-side key in `transcription-service`) | `secrets` |
 | Billing | **Stripe** (subscriptions/seats/dunning/tax) | `secrets` |
-| LLM routing | **LiteLLM** fronting **Anthropic / OpenAI** | `secrets` |
+| LLM routing | **LiteLLM** fronting **Anthropic** | `secrets` |
 
 ---
 

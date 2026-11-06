@@ -1,0 +1,36 @@
+# GPU override for the model servers. CPU is the default in compose.prod.yml; layer this file on
+# top ONLY on a host with an NVIDIA GPU and the NVIDIA Container Toolkit installed:
+#
+#   docker compose -f compose.prod.yml -f compose.gpu.yml --profile intelligence up -d
+#   Validate: POSTGRES_PASSWORD=x PUBLIC_HOSTNAME=:80 docker compose -f compose.prod.yml -f compose.gpu.yml --profile '*' config
+#
+# NOT currently usable on the existing VPS (no GPU; see audit notes). Nothing runs this today.
+# The embedding/reranker code only requests a GPU when EMBEDDING_GPU=1 / RERANKER_GPU=1 AND Ray
+# can see one (services/*/serve.py), so setting the flag on a CPU host degrades to CPU.
+#
+# The CUDA image does not exist yet (the intelligence repo records the GPU packaging as
+# BLOCKED); INTELLIGENCE_GPU_IMAGE is a placeholder tag.
+
+x-gpu: &gpu
+  image: ${INTELLIGENCE_GPU_IMAGE:-ghcr.io/mytheus-ai/mytheus-intelligence:main-cuda}
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            count: 1
+            capabilities: [gpu]
+
+services:
+  embedding-service:
+    <<: *gpu
+    environment:
+      EMBEDDING_GPU: "1"
+  embedding-worker:
+    <<: *gpu
+    environment:
+      EMBEDDING_GPU: "1"
+  reranker-service:
+    <<: *gpu
+    environment:
+      RERANKER_GPU: "1"

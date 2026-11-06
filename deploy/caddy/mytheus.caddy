@@ -50,6 +50,29 @@ api.mytheus.cloud {
 	# the tenant once, and FAILS CLOSED before any tenant-scoped store is touched; pointing
 	# this at a service bypasses that checkpoint entirely. It also owns routing, so every
 	# service other than core-api is unreachable if this names a single service.
-	reverse_proxy api-gateway:8000
+	# Socket.io (WebSocket + long-poll) goes to realtime-gateway, which authenticates the handshake
+	# itself against Clerk's JWKS. Same host as the API so browsers need no extra origin/CORS.
+	# Unique alias `mytheus-realtime`, for the same shared-network reason as `mytheus-webapp`.
+	# Until the `realtime` compose profile is enabled this path answers 502, nothing else changes.
+	# Caddy proxies WebSocket upgrades without extra config. transcription-service, qdrant, the
+	# intelligence services, prometheus and grafana are deliberately NOT routed.
+	handle /socket.io/* {
+		reverse_proxy mytheus-realtime:8090
+	}
+	handle {
+		reverse_proxy api-gateway:8000
+	}
 	tls internal
 }
+
+# Grafana is internal-only. To expose it, uncomment AFTER generating a bcrypt hash
+# (`caddy hash-password`) and substituting it below; never ship it without basic auth.
+# Needs a DNS record + Cloudflare entry for the host first. DISABLED BY DEFAULT.
+# grafana.mytheus.cloud {
+# 	encode zstd gzip
+# 	basic_auth {
+# 		ops <PASTE_BCRYPT_HASH_HERE>
+# 	}
+# 	reverse_proxy mytheus-grafana:3000
+# 	tls internal
+# }
