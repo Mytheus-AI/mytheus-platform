@@ -43,3 +43,11 @@ groups:
         labels: { severity: warn }
         annotations:
           summary: "{{ $labels.job }}/{{ $labels.instance }} is not scrapable (down, or serves no /metrics)"
+
+      - alert: AudioTapWorkerDown
+        # absent() also fires when the target was never discovered or is not deployed at all.
+        expr: absent(up{job="workers",service="audio-tap-worker"} == 1)
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "No audio-tap-worker scrape target is up for 2m; meeting audio is not reaching transcription"

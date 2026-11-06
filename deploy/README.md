@@ -154,6 +154,16 @@ environment. `ner` and `kg` are separate profiles (disabled unless named).
 | `realtime` | realtime-gateway, transcription-service | 8090 / 8091 |
 | `observability` | prometheus, grafana | 9090 / 3000 (internal only) |
 
+- **Backend consumers + audio tap (default profile, no published ports, METRICS_PORT=9100 scraped by the
+  Prometheus `workers` job):** `core-api-consumer`, `meeting-consumer`, `audio-tap-worker`. Each has its own
+  env file layered on `prod.env`: `prod.db.core-consumer.env`, `prod.db.meeting-consumer.env` (each its own
+  `DATABASE_URL`) and `prod.audio-tap.env` (`INTERNAL_AUDIO_TOKEN`, no DB; must match transcription-service).
+  `meeting-service` runs with `AUDIO_TAP_MODE=worker` so the API process never taps audio; the dedicated worker
+  connects to `ws://transcription-service:8091/internal/audio` (enable the `realtime` profile too).
+  Alert `AudioTapWorkerDown` fires if no audio-tap-worker target is up for 2m.
+- **Monthly partitions (operator task, no cron installed):** each month run `scripts/ensure_partitions.py`
+  from BOTH mytheus-backend and transcription-service (their partitioned tables stop accepting inserts
+  once the next month's partition is missing).
 - **Public routes** (Caddy): only the existing gateway, plus `/socket.io/*` on `api.mytheus.cloud` to
   `mytheus-realtime:8090`. Everything else, including Qdrant, transcription and Grafana, is
   internal. A basic-auth Grafana block is in `caddy/mytheus.caddy`, commented out.

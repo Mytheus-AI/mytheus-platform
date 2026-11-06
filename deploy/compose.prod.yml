@@ -354,6 +354,9 @@ services:
   meeting-service:
     <<: *backend-app
     command: ["uvicorn", "services.meeting_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      # The API process must not tap audio; the dedicated `audio-tap-worker` does.
+      AUDIO_TAP_MODE: worker
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -375,6 +378,64 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # --- Kafka consumers + audio tap (default profile, same as web/meeting-service) -----------
+  #
+  # Each has its OWN DB credential file (D1 pattern) so no consumer can read another's, or the
+  # request-path `prod.db.app.env`. Kafka/Redpanda topology comes from prod.env like `relay`.
+  # METRICS_PORT=9100 is scraped by the `workers` job; there is no HTTP port, so no healthcheck.
+  core-api-consumer:
+    <<: *backend
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.core-consumer.env
+        required: false
+    command: ["python", "-m", "services.core_api.consumer"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      web:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  meeting-consumer:
+    <<: *backend
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.meeting-consumer.env
+        required: false
+    command: ["python", "-m", "services.meeting_service.consumer"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      meeting-service:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  # Dedicated LiveKit audio tap -> transcription-service. No DB credential at all: prod.env
+  # (LIVEKIT_URL/API_KEY/API_SECRET, same source as meeting-service) + prod.audio-tap.env
+  # (INTERNAL_AUDIO_TOKEN, which must equal the value transcription-service validates).
+  # Publishes no ports. transcription-service is in the `realtime` profile, so without that
+  # profile this worker retries its connection; enable `realtime` together with this.
+  audio-tap-worker:
+    <<: *backend
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.audio-tap.env
+        required: false
+    command: ["python", "-m", "services.meeting_service.audio_tap_worker"]
+    environment:
+      AUDIO_TAP_MODE: worker
+      TRANSCRIPTION_AUDIO_URL: ws://transcription-service:8091/internal/audio
+      METRICS_PORT: "9100"
+    depends_on:
+      meeting-service:
+        condition: service_healthy
 
   # These four currently expose no routes beyond /healthz - they are scaffolds whose bands have
   # not landed. Deployed anyway so the topology is complete and the gateway's route map has a
