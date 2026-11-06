@@ -1,0 +1,35 @@
+# Alert rules. Prometheus evaluates these; there is NO Alertmanager in the stack yet, so they
+# are visible in the Prometheus/Grafana UI only and notify nobody. Wiring a receiver is an open
+# decision. Metric names: see the header of prometheus.yml (assumed until metrics.md lands).
+groups:
+  - name: mytheus-pipeline
+    rules:
+      - alert: ConsumerLagHigh
+        # Lag above 5s SUSTAINED for 5 minutes, per consumer group/topic.
+        expr: max by (service, group, topic) (consumer_lag_seconds) > 5
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "Consumer lag > 5s for 5m ({{ $labels.service }} {{ $labels.group }}/{{ $labels.topic }})"
+
+      - alert: DeadLetterQueueNonEmpty
+        # Any dead-lettered message at all in the last 5 minutes. `for: 0m` = fire immediately.
+        expr: sum by (service, topic) (increase(dlq_total[5m])) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "Messages dead-lettered ({{ $labels.service }} {{ $labels.topic }})"
+
+      - alert: OutboxBacklogGrowing
+        expr: max by (service) (outbox_backlog) > 1000
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "Outbox backlog > 1000 for 10m ({{ $labels.service }}); is the relay running?"
+
+      - alert: TargetDown
+        expr: up == 0
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.job }}/{{ $labels.instance }} is not scrapable (down, or serves no /metrics)"
