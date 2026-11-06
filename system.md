@@ -127,7 +127,7 @@ Terraform Cloud is the single control plane for all cloud-provider state; nothin
 | Meeting transport | **LiveKit** (self-hostable SFU behind a transport adapter) | `secrets` + service config |
 | Transcription | **Deepgram** (WS proxy, server-side key in `transcription-service`) | `secrets` |
 | Billing | **Stripe** (subscriptions/seats/dunning/tax) | `secrets` |
-| LLM routing | **LiteLLM** fronting **Anthropic / OpenAI** | `secrets` |
+| LLM routing | **LiteLLM** fronting **Anthropic** | `secrets` |
 
 ---
 
@@ -146,7 +146,7 @@ Terraform Cloud is the single control plane for all cloud-provider state; nothin
 
   No RTO may exceed the downtime budget of the tier it serves.
 - **Failover routing:** Cloudflare health-checked DNS swings traffic to the passive region on primary failure. Failover, rollback, and game-day procedures live in `runbooks/`.
-- **Data residency per tenant region:** tenant compute + data pinned to `data_residency.region` (`us`/`eu`/`ap`), enforced for GDPR (`12-compliance-and-privacy.md`). Object buckets (`nexus-recordings`, `nexus-documents`, …) are regional per `object_bucket_region`.
+- **Data residency per tenant region:** tenant compute + data pinned to `data_residency.region` (`us`/`eu`/`ap`), enforced for GDPR (`12-compliance-and-privacy.md`). Object buckets (`mytheus-recordings`, `mytheus-documents`, …) are regional per `object_bucket_region`.
 
 ---
 
@@ -207,7 +207,7 @@ Three binding principles: every signal is tenant-attributable (`org_id` on every
 ## 14. Security / compliance hooks
 
 - **Network policies** default-deny per namespace; **WAF** at Cloudflare; mTLS via the optional mesh.
-- **Audit log archival** to a dedicated regional bucket (`nexus-audit`) with retention per `12-compliance-and-privacy.md`.
+- **Audit log archival** to a dedicated regional bucket (`mytheus-audit-archive`) with retention per `12-compliance-and-privacy.md`.
 - **SOC2 controls in infra:** plan→review→apply with approvals, immutable image promotion by digest, least-privilege IAM (IRSA/Workload Identity), secrets never in git/images, and the standing shift-left scan gates (§9).
 - **Tenant isolation invariants** preserved in every networking/storage change: RLS, per-tenant Qdrant collections + `org_id` payload filter, tenant-partitioned Redpanda topics, the `nexus:{org_id}:` Redis prefix, and per-tenant KMS data keys.
 

@@ -1,0 +1,14 @@
+# Alertmanager config. Deliberately NO real notification credentials: every alert goes to the
+# `default` receiver, which has no integrations (a null sink). Alerts are therefore retained and
+# visible in the Alertmanager UI (internal :9093) instead of being silently dropped by Prometheus.
+# To notify someone, add a receiver (slack_configs / email_configs / webhook_configs) here and
+# keep its secret in a file referenced via *_file, never inline in this repo.
+route:
+  receiver: default
+  group_by: [alertname, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+
+receivers:
+  - name: default

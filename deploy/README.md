@@ -6,7 +6,7 @@ Plan 14). The service seams are real; this co-locates them in one deployable.
 
 ## Target
 
-- VPS `srv1804132` (`187.127.190.246`), Ubuntu, x86_64.
+- VPS host: **UNRESOLVED, see the TODO-for-owner note below** (two different hosts are recorded in this repo). Ubuntu, x86_64.
 - One backend image runs three roles: `web` (uvicorn), `relay` (outbox drain, the only sanctioned
   producer), `workflow` (Temporal workers). The image is PULLED from
   `ghcr.io/mytheus-ai/mytheus-backend`, published by mytheus-backend CI; nothing is built here.
@@ -23,6 +23,10 @@ Plan 14). The service seams are real; this co-locates them in one deployable.
 | `compose.prod.yml` | the full stack (stores + backend roles) |
 | `postgres-init/prod-bootstrap.sql` | one-shot post-init hook: sets the postgres password and makes it own `public` |
 | `deploy.sh` | manual fallback bring-up: pull images, up, wait for health |
+| `mytheus-deploy.sh` | **reviewed copy** of the VPS forced command `/usr/local/sbin/mytheus-deploy.sh` (gap 26); NOT yet adopted, see below |
+| `compose.gpu.yml` | override: GPU image + NVIDIA reservation for embedding/reranker (CPU is the default) |
+| `caddy/mytheus.caddy` | Mytheus site blocks for the shared Caddy (now also routes `/socket.io/*` to realtime-gateway) |
+| `../observability/` | Prometheus config + alert rules, Grafana provisioning + dashboards |
 
 ## First-time setup on the VPS
 
@@ -122,8 +126,8 @@ docker compose -f compose.prod.yml logs -f relay workflow    # workers running
   self-hosted or move to managed Supabase. Note that a managed provider must still be given
   the three roles, so point `BOOTSTRAP_DATABASE_URL` at its owner credential and let the
   `migrate` step create them there too.
-- **Realtime / intelligence tiers** deploy as their own compose stacks/images (separate scaling
-  families, separate cost centers); their deploy descriptors land alongside their scale-out bands.
+- **Realtime / intelligence tiers** are now defined in `compose.prod.yml` behind profiles; see
+  "Optional tiers" below.
 - **Rollback**: every CI build is tagged with its commit SHA, so pin the previous one and bring
   the stack back up:
   ```bash
@@ -136,3 +140,55 @@ docker compose -f compose.prod.yml logs -f relay workflow    # workers running
 - **Deploying via Dokploy** is the normal path; this script is the fallback for when Dokploy
   itself is broken. Both run the same compose file under the same project name, `mytheus`, so
   they share one set of containers and one set of volumes rather than creating a second stack.
+
+## Optional tiers (compose profiles)
+
+Off by default so the forced-command `up -d --pull always` cannot fail on an image that is not
+published yet. Enable with `COMPOSE_PROFILES=intelligence,realtime,observability` in the deploy
+environment. `ner` and `kg` are separate profiles (disabled unless named).
+
+| Profile | Services | Internal ports |
+| --- | --- | --- |
+| `intelligence` | qdrant, embedding-service(+worker, relay), reranker-service, ingestion-service(+worker), search-service(+worker) | embedding 8101, reranker 8102, ingestion 8103, search 8104 |
+| `ner` / `kg` | ner-service / knowledge-graph-service | 8105 / 8106 |
+| `realtime` | realtime-gateway, transcription-service | 8090 / 8091 |
+| `observability` | prometheus, grafana | 9090 / 3000 (internal only) |
+
+- **Backend consumers + audio tap (default profile, no published ports, METRICS_PORT=9100 scraped by the
+  Prometheus `workers` job):** `core-api-consumer`, `meeting-consumer`, `audio-tap-worker`. Each has its own
+  env file layered on `prod.env`: `prod.db.core-consumer.env`, `prod.db.meeting-consumer.env` (each its own
+  `DATABASE_URL`) and `prod.audio-tap.env` (`INTERNAL_AUDIO_TOKEN`, no DB; must match transcription-service).
+  `meeting-service` runs with `AUDIO_TAP_MODE=worker` so the API process never taps audio; the dedicated worker
+  connects to `ws://transcription-service:8091/internal/audio` (enable the `realtime` profile too).
+  Alert `AudioTapWorkerDown` fires if no audio-tap-worker target is up for 2m.
+- **Monthly partitions (operator task, no cron installed):** each month run `scripts/ensure_partitions.py`
+  from BOTH mytheus-backend and transcription-service (their partitioned tables stop accepting inserts
+  once the next month's partition is missing).
+- **Public routes** (Caddy): only the existing gateway, plus `/socket.io/*` on `api.mytheus.cloud` to
+  `mytheus-realtime:8090`. Everything else, including Qdrant, transcription and Grafana, is
+  internal. A basic-auth Grafana block is in `caddy/mytheus.caddy`, commented out.
+- **Qdrant keys**: write key only in `env/prod.embedding.env`; read-only key in `env/prod.search.env`.
+- **Object storage**: Cloudflare R2 (ADR-0023), no MinIO. `S3_*` in `prod.platform.env`/`prod.ingestion.env`
+  (the intelligence code reads `S3_*` first and falls back to `MINIO_*` only for local MinIO).
+- **GPU**: `docker compose -f compose.prod.yml -f compose.gpu.yml --profile intelligence up -d`.
+- Validate: `POSTGRES_PASSWORD=x PUBLIC_HOSTNAME=:80 docker compose -f compose.prod.yml --profile '*' config -q`.
+- Prometheus/Grafana read `../observability`; if the deploy tool (Dokploy) does not preserve the repo
+  layout, set `MYTHEUS_OBS_DIR` to a host path valid in BOTH namespaces (same trap as `MYTHEUS_ENV_DIR`).
+
+## Deploy script versioning (gap 26)
+
+`mytheus-deploy.sh` here is a **reconstruction** of the script on the VPS, written from the CI
+invocation and the docs without access to the live file. Before adopting it: diff the VPS copy
+against it, reconcile the `ASSUMED` values, then install it (or have the forced command exec the
+checked-out copy). Until then the VPS copy remains the one that actually runs.
+
+## TODO-for-owner: VPS host discrepancy (NOT resolved here)
+
+Two different hosts are recorded; confirm which is real and fix the other:
+
+| Host | Where recorded |
+| --- | --- |
+| `srv1804132` / `187.127.190.246` | `deploy/compose.prod.yml` header (line 5), this file, `mytheus-docs/work-done-till-now/06-frontend-and-ui.md:82` |
+| `srv1756037.hstgr.cloud` / `93.127.172.17` (Ubuntu 24.04, KVM 8: 8 vCPU / 32 GB / 400 GB) | `PREVIOUS.md:13`; `env/prod.env.example` (`PUBLIC_HOSTNAME=srv1756037.hstgr.cloud`) |
+
+`VPS_HOST` in the GitHub `production` environment is the live truth and is not visible from the repo.

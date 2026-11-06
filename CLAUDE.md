@@ -1,6 +1,8 @@
 # CLAUDE.md
 
-This is `mytheus-platform`, the platform and infrastructure repo for Mytheus: Terraform IaC, Kubernetes (EKS/GKE), Helm, GitHub Actions CI/CD, observability, and multi-region DR. It contains no application code; it deploys the other Mytheus repos. The single most important thing: this repo is infra-as-code only (no click-ops), every change goes plan -> review -> apply, and you never weaken tenant isolation or commit a secret.
+This is `mytheus-platform`, the deploy-substrate repo for Mytheus. **What exists today is Docker Compose on one VPS plus GitHub Actions CI**: `deploy/compose.prod.yml` (+ `compose.gpu.yml`), `deploy/deploy.sh`, `deploy/mytheus-deploy.sh` (reviewed copy of the VPS forced command), `deploy/caddy/`, `env/*.env.example`, `observability/` (Prometheus + Grafana), and `.github/workflows/`. It contains no application code; it deploys the other Mytheus repos. Standing rules: never weaken tenant isolation, never commit a secret.
+
+> **Reality check (read before trusting the rest of this file).** There is NO `terraform/`, `k8s/` or `helm/` directory, no Argo CD, no Terraform Cloud state, no EKS/GKE, and nothing is provisioned by IaC. Everything below that mentions Terraform layers, Kubernetes, Helm, Kustomize, Argo CD/Rollouts, multi-region DR or "plan -> review -> apply" describes the **planned post-W36 target (Plan 14), not the repo**; the "Where things live" tree, "Add a Terraform module" and similar recipes are aspirational and their commands cannot be run. The actual deploy path is: CI SSHes to the VPS, a forced command (`/usr/local/sbin/mytheus-deploy.sh`) runs `docker compose up` against `deploy/compose.prod.yml`. The managed-plane table below is likewise target state: today Postgres, Redis, Redpanda, Temporal and Qdrant are self-hosted in compose, and object storage is Cloudflare R2 (ADR-0023).
 
 ## Repo at a glance
 
@@ -13,8 +15,8 @@ This repo decides how and where every Mytheus service runs, never what it does. 
 
 Two substrates exist, by stage:
 
-- Production substrate: Kubernetes on AWS EKS / GCP GKE, provisioned by Terraform (state in Terraform Cloud), workloads delivered by Helm + Kustomize through Argo CD GitOps. Multi-region, active-passive evolving to active-active.
-- Early-stage path: before Kubernetes is warranted, Mytheus runs as a modular monolith on Railway/Render with Docker Compose as the local-dev source of truth. The service seams are real from day one; the early stage just co-locates them in one deployable. Services are then extracted onto K8s in the frozen Wave 1-4 order (below).
+- Production substrate (TARGET, not built): Kubernetes on AWS EKS / GCP GKE, provisioned by Terraform (state in Terraform Cloud), workloads delivered by Helm + Kustomize through Argo CD GitOps. Multi-region, active-passive evolving to active-active.
+- Early-stage path (ACTUAL): Mytheus runs as a modular monolith on a self-hosted VPS (ADR-0016; Railway/Render was superseded) with Docker Compose as the local-dev source of truth. The service seams are real from day one; the early stage just co-locates them in one deployable. Services are then extracted onto K8s in the frozen Wave 1-4 order (below).
 
 Ground every "why" in `system.md` and the canon docs it cites (`16-deployment-and-infrastructure.md` is the key one; also `15-observability-and-sre.md`, `14-reliability-and-dr.md`, `13-scalability-and-performance.md`, `17-cost-and-finops.md`, `12-compliance-and-privacy.md`).
 
@@ -47,14 +49,14 @@ Managed planes wired here (this repo provisions and wires them; app repos consum
 | Relational store of record | Supabase Postgres (primary + read replica + PITR) | `data` |
 | Vector store | Qdrant Cloud (per-tenant collections, `org_id` payload filter) | `data` |
 | Cache / pub-sub / queues | Upstash Redis (`nexus:{org_id}:` prefix, ephemeral) | `data` |
-| Object storage | **Cloudflare R2** (S3-compatible; `nexus-recordings`, `nexus-documents`, `nexus-audit-archive`, `nexus-invoices`, `nexus-exports`, each `{org_id}/` prefixed) | `data` (the bucket is a store, even though Cloudflare's CDN/WAF is `edge`) |
+| Object storage | **Cloudflare R2** (S3-compatible; `mytheus-recordings`, `mytheus-documents`, `mytheus-audit-archive`, `mytheus-invoices`, `mytheus-exports`, each `{org_id}/` prefixed) | `data` (the bucket is a store, even though Cloudflare's CDN/WAF is `edge`) |
 | Event backbone | Redpanda + Schema Registry (BYOC, tenant-partitioned, Avro BACKWARD) | `data` |
 | Durable execution | Temporal Cloud namespace | `data` |
 | Identity | Clerk (SSO/SAML/SCIM) | `secrets` + service config |
 | Meeting transport | LiveKit (SFU behind a transport adapter) | `secrets` + service config |
 | Transcription | Deepgram (WS proxy, server-side key) | `secrets` |
 | Billing | Stripe | `secrets` |
-| LLM routing | LiteLLM fronting Anthropic / OpenAI | `secrets` |
+| LLM routing | LiteLLM fronting Anthropic | `secrets` |
 
 ## Where things live
 
@@ -103,7 +105,7 @@ DR specifics that are intentional, not bugs: active-passive evolving to active-a
 
 ## Naming authority
 
-Service names, topic names, store names, bucket names (`nexus-recordings`, `nexus-documents`, `nexus-audit`, ...), the AGE graph `nexus_knowledge`, and the `nexus:{org_id}:` Redis prefix are frozen in `mytheus-docs` `_canon/` (`01-service-catalog.md`, `02-data-model.md`, `03-event-taxonomy.md`). Deploy everything under those exact names. Never rename a service in a manifest, invent a topic or bucket, or introduce an alias. If a name seems wrong, the fix lands in `_canon/` first via ADR, then propagates here, never the reverse.
+Service names, topic names, store names, bucket names (`mytheus-recordings`, `mytheus-documents`, `mytheus-audit-archive`, ...), the AGE graph `nexus_knowledge`, and the `nexus:{org_id}:` Redis prefix are frozen in `mytheus-docs` `_canon/` (`01-service-catalog.md`, `02-data-model.md`, `03-event-taxonomy.md`). Deploy everything under those exact names. Never rename a service in a manifest, invent a topic or bucket, or introduce an alias. If a name seems wrong, the fix lands in `_canon/` first via ADR, then propagates here, never the reverse.
 
 ## Common tasks (recipes)
 

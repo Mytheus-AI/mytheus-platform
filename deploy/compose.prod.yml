@@ -74,6 +74,42 @@ x-backend-app: &backend-app
     - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.app.env
       required: false
 
+# --- Intelligence + realtime tiers (opt-in via compose profiles) ----------------------------
+#
+# These tiers are behind PROFILES (`intelligence`, `realtime`, `observability`; ner and kg have
+# their own) and are therefore NOT started by a plain `docker compose up -d`, which is what
+# the forced-command deploy runs. That is deliberate: until their images are published, a
+# default-on definition would make `up -d --pull always` fail on the first missing image and
+# break the deploy of the services that DO exist. To enable, set on the host (e.g. in the
+# deploy environment): COMPOSE_PROFILES=intelligence,realtime,observability
+#
+# Credential isolation follows the D1 pattern: no new service reads prod.env (Clerk, Stripe,
+# LiveKit secrets). Each gets the shared NON-SECRET topology file prod.platform.env plus only
+# the secret file(s) it needs:
+#   prod.qdrant.env          qdrant            both Qdrant keys (server side)
+#   prod.db.ai.env           embedding*, ingestion*, search*   DATABASE_URL as mytheus_ai_app
+#   prod.db.ai-relay.env     embedding-relay   DATABASE_URL as mytheus_ai_relay
+#   prod.embedding.env       embedding*        QDRANT_API_KEY (WRITE) - nobody else holds it
+#   prod.search.env          search*, kg       QDRANT_READ_ONLY_API_KEY
+#   prod.ingestion.env       ingestion*        S3_* object-storage credential (Cloudflare R2)
+#   prod.realtime.env        realtime-gateway  Clerk JWKS URL etc. (no DB credential at all)
+#   prod.transcription.env   transcription     Deepgram + LiveKit + its DB credential
+#   prod.grafana.env         grafana           admin password
+x-intel: &intel
+  image: ${INTELLIGENCE_IMAGE:-ghcr.io/mytheus-ai/mytheus-intelligence:main}
+  pull_policy: always
+  restart: unless-stopped
+  profiles: ["intelligence"]
+  env_file:
+    - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+      required: false
+
+x-healthz-py: &healthz-py
+  interval: 10s
+  timeout: 5s
+  retries: 10
+  start_period: 20s
+
 services:
   postgres:
     image: supabase/postgres:15.8.1.060
@@ -215,6 +251,8 @@ services:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.relay.env
         required: false
     command: ["python", "-m", "services.relay.main"]
+    environment:
+      METRICS_PORT: "9100"
     depends_on:
       web:
         condition: service_started
@@ -283,6 +321,29 @@ services:
       - "0.0.0.0"
       - --port
       - "8000"
+    # Key custody (mytheus-docs ADR-0026): the KEK and the blind-index root are files, mounted
+    # read-only into THIS container ONLY. No other service gets them. Host files must be mode
+    # 0400 owned by uid 10001 (the image's appuser); the provider refuses to start otherwise,
+    # and mytheus-deploy.sh checks the same before `up`. create_host_path: false so a missing
+    # host file is an error, not a silently created empty directory. Only paths and the
+    # custody mode are set here; no key value is ever in an environment variable.
+    environment:
+      MYTHEUS_KEY_CUSTODY: local-file
+      MYTHEUS_KEK_FILE: /run/secrets/mytheus_kek
+      MYTHEUS_BLIND_INDEX_KEY_FILE: /run/secrets/mytheus_blind_index_key
+    volumes:
+      - type: bind
+        source: ${MYTHEUS_KEYS_DIR:-/etc/dokploy/mytheus-secrets/keys}/mytheus_kek
+        target: /run/secrets/mytheus_kek
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${MYTHEUS_KEYS_DIR:-/etc/dokploy/mytheus-secrets/keys}/mytheus_blind_index_key
+        target: /run/secrets/mytheus_blind_index_key
+        read_only: true
+        bind:
+          create_host_path: false
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -293,6 +354,9 @@ services:
   meeting-service:
     <<: *backend-app
     command: ["uvicorn", "services.meeting_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment:
+      # The API process must not tap audio; the dedicated `audio-tap-worker` does.
+      AUDIO_TAP_MODE: worker
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -314,6 +378,64 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
+
+  # --- Kafka consumers + audio tap (default profile, same as web/meeting-service) -----------
+  #
+  # Each has its OWN DB credential file (D1 pattern) so no consumer can read another's, or the
+  # request-path `prod.db.app.env`. Kafka/Redpanda topology comes from prod.env like `relay`.
+  # METRICS_PORT=9100 is scraped by the `workers` job; there is no HTTP port, so no healthcheck.
+  core-api-consumer:
+    <<: *backend
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.core-consumer.env
+        required: false
+    command: ["python", "-m", "services.core_api.consumer"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      web:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  meeting-consumer:
+    <<: *backend
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.meeting-consumer.env
+        required: false
+    command: ["python", "-m", "services.meeting_service.consumer"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      meeting-service:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+
+  # Dedicated LiveKit audio tap -> transcription-service. No DB credential at all: prod.env
+  # (LIVEKIT_URL/API_KEY/API_SECRET, same source as meeting-service) + prod.audio-tap.env
+  # (INTERNAL_AUDIO_TOKEN, which must equal the value transcription-service validates).
+  # Publishes no ports. transcription-service is in the `realtime` profile, so without that
+  # profile this worker retries its connection; enable `realtime` together with this.
+  audio-tap-worker:
+    <<: *backend
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.audio-tap.env
+        required: false
+    command: ["python", "-m", "services.meeting_service.audio_tap_worker"]
+    environment:
+      AUDIO_TAP_MODE: worker
+      TRANSCRIPTION_AUDIO_URL: ws://transcription-service:8091/internal/audio
+      METRICS_PORT: "9100"
+    depends_on:
+      meeting-service:
+        condition: service_healthy
 
   # These four currently expose no routes beyond /healthz - they are scaffolds whose bands have
   # not landed. Deployed anyway so the topology is complete and the gateway's route map has a
@@ -410,7 +532,431 @@ services:
   # brought the full stack up (Dokploy included) would fail on a port collision. Removed
   # rather than left dormant so the file describes what really runs.
 
+  # --- Intelligence tier (profile: intelligence) ----------------------------------------------
+  #
+  # Container-internal ports (embedding 8101, reranker 8102, ingestion 8103, search 8104 ... kg 8106).
+  # They are independent of the local dev ports in mytheus-intelligence/README.md (8200 block).
+  # None publish a port; reachable only on the docker network.
+
+  # Vector store. The two-key split mirrors mytheus-intelligence/docker-compose.yml and
+  # libs/shared/qdrant.py: the WRITE key (QDRANT__SERVICE__API_KEY) goes to embedding-service
+  # only, via prod.embedding.env as QDRANT_API_KEY; every reader gets the READ-ONLY key. The two
+  # must differ (libs/shared/qdrant.py refuses to build a client otherwise). No ports published:
+  # unlike dev, nothing outside the docker network can reach it.
+  # If prod.qdrant.env is MISSING this starts with NO api key (required: false keeps a
+  # secretless checkout renderable); mytheus-deploy.sh asserts both keys before `up`.
+  qdrant:
+    image: qdrant/qdrant:v1.12.4
+    profiles: ["intelligence"]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.qdrant.env
+        required: false
+    volumes:
+      - qdrantdata:/qdrant/storage
+    healthcheck:
+      # Plain TCP probe: /collections needs a key once one is configured (see the dev file).
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # Synchronous query-embed API (POST /internal/embed). CPU by default; compose.gpu.yml swaps
+  # the image and requests the GPU. Holds the Qdrant WRITE key (sole writer, CLAUDE.md).
+  embedding-service:
+    <<: *intel
+    networks:
+      default:
+        aliases: ["mytheus-embedding"]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.embedding.env
+        required: false
+    command: ["uvicorn", "services.embedding_service.main:app", "--host", "0.0.0.0", "--port", "8101"]
+    environment:
+      EMBEDDING_GPU: "0"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8101/healthz').status==200 else 1)"
+    expose:
+      - "8101"
+
+  # The embed-on-ingest consumer: the process that actually writes Qdrant.
+  embedding-worker:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.embedding.env
+        required: false
+    command: ["python", "-m", "services.embedding_service.worker"]
+    environment:
+      EMBEDDING_GPU: "0"
+      METRICS_PORT: "9100"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # Drains intelligence.outbox. One relay per repo (intelligence CLAUDE.md); its own role
+  # (mytheus_ai_relay) and its own file so no request-path process can read that credential.
+  embedding-relay:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai-relay.env
+        required: false
+    command: ["python", "-m", "services.embedding_service.relay_main"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  reranker-service:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+    command: ["uvicorn", "services.reranker_service.main:app", "--host", "0.0.0.0", "--port", "8102"]
+    environment:
+      RERANKER_GPU: "0"
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8102/healthz').status==200 else 1)"
+    expose:
+      - "8102"
+
+  ingestion-service:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.ingestion.env
+        required: false
+    command: ["uvicorn", "services.ingestion_service.main:app", "--host", "0.0.0.0", "--port", "8103"]
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8103/healthz').status==200 else 1)"
+    expose:
+      - "8103"
+
+  ingestion-worker:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.ingestion.env
+        required: false
+    command: ["python", "-m", "services.ingestion_service.worker"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # Holds the Qdrant READ-ONLY key only.
+  search-service:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.search.env
+        required: false
+    command: ["uvicorn", "services.search_service.main:app", "--host", "0.0.0.0", "--port", "8104"]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8104/healthz').status==200 else 1)"
+    expose:
+      - "8104"
+
+  search-worker:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.search.env
+        required: false
+    command: ["python", "-m", "services.search_service.worker"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # Disabled by default (profile `ner` only; NOT enabled by `intelligence`). Own image and
+  # Dockerfile (services/ner_service/Dockerfile: spaCy, no DB, no Qdrant). Container port is
+  # moved from the Dockerfile's 8080 to 8105, so its baked-in HEALTHCHECK is overridden.
+  ner-service:
+    image: ${NER_IMAGE:-ghcr.io/mytheus-ai/mytheus-ner:main}
+    pull_policy: always
+    profiles: ["ner"]
+    restart: unless-stopped
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+    command: ["uvicorn", "services.ner_service.main:app", "--host", "0.0.0.0", "--port", "8105"]
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8105/healthz').status==200 else 1)"
+    expose:
+      - "8105"
+
+  # Disabled by default (profile `kg`): scaffold that answers only /healthz today. Needs
+  # Postgres+AGE; reads (never writes) Qdrant.
+  knowledge-graph-service:
+    <<: *intel
+    profiles: ["kg"]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.search.env
+        required: false
+    command: ["uvicorn", "services.knowledge_graph_service.main:app", "--host", "0.0.0.0", "--port", "8106"]
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8106/healthz').status==200 else 1)"
+    expose:
+      - "8106"
+
+  # --- Realtime tier (profile: realtime) ----------------------------------------------------
+
+  # Socket.io fan-out. Public via Caddy (/socket.io/* on the api host). Holds NO database
+  # credential: Redis + Redpanda + Clerk JWKS only. The alias is namespaced because the shared
+  # Caddy spans other stacks' networks (see the `ui` comment).
+  realtime-gateway:
+    image: ${REALTIME_GATEWAY_IMAGE:-ghcr.io/mytheus-ai/mytheus-realtime-gateway:main}
+    pull_policy: always
+    profiles: ["realtime"]
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: ["mytheus-realtime"]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.realtime.env
+        required: false
+    environment:
+      PORT: "8090"
+      WS_BIND_HOST: "0.0.0.0"
+      CORE_API_URL: http://core-api:8000
+    depends_on:
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      # Node 20 global fetch; 127.0.0.1 not localhost (IPv4-only bind, same trap as `ui`).
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    expose:
+      - "8090"
+
+  # Deepgram WS proxy. Internal only (LiveKit's audio hook connects over the docker network).
+  # Holds its own DB credential (transcript_chunks) + Deepgram + LiveKit; nothing else does.
+  # /healthz does NOT reflect consumer liveness (known gap 8b).
+  transcription-service:
+    image: ${TRANSCRIPTION_IMAGE:-ghcr.io/mytheus-ai/mytheus-transcription:main}
+    pull_policy: always
+    profiles: ["realtime"]
+    restart: unless-stopped
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.transcription.env
+        required: false
+    command: ["uvicorn", "transcription_service.main:app", "--host", "0.0.0.0", "--port", "8091"]
+    environment:
+      TRANSCRIPTION_WS_BIND: "0.0.0.0"
+    depends_on:
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8091/healthz').status==200 else 1)"
+    expose:
+      - "8091"
+
+  # --- Observability (profile: observability) -----------------------------------------------
+  #
+  # INTERNAL ONLY: no published ports and no Caddy route (a commented, basic-auth-gated Grafana
+  # block exists in caddy/mytheus.caddy). Reach Grafana with an SSH tunnel to its container IP,
+  # or enable that block. Config is read from ../observability in this checkout; override with
+  # MYTHEUS_OBS_DIR if the deploy tool does not keep the repo layout (Dokploy: see header).
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=15d
+      - --web.enable-lifecycle
+    volumes:
+      - ${MYTHEUS_OBS_DIR:-../observability}/prometheus:/etc/prometheus:ro
+      - prometheusdata:/prometheus
+    depends_on:
+      alertmanager:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9090/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "9090"
+    restart: unless-stopped
+
+  # Receives Prometheus alerts. Default receiver is a null sink (no notification credentials in
+  # this repo); add a real receiver in alertmanager.yml / a mounted override when decided.
+  alertmanager:
+    image: prom/alertmanager:v0.28.0
+    profiles: ["observability"]
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yml
+      - --storage.path=/alertmanager
+    volumes:
+      - ${MYTHEUS_OBS_DIR:-../observability}/alertmanager:/etc/alertmanager:ro
+      - alertmanagerdata:/alertmanager
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "9093"
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    profiles: ["observability"]
+    networks:
+      default:
+        aliases: ["mytheus-grafana"]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.grafana.env
+        required: false
+    environment:
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+    volumes:
+      - ${MYTHEUS_OBS_DIR:-../observability}/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ${MYTHEUS_OBS_DIR:-../observability}/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    expose:
+      - "3000"
+    restart: unless-stopped
+
 volumes:
   pgdata:
   redisdata:
   redpandadata:
+  qdrantdata:
+  prometheusdata:
+  alertmanagerdata:
+  grafanadata:

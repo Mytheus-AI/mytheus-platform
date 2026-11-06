@@ -1,0 +1,53 @@
+# Alert rules. Prometheus evaluates these and sends firing alerts to Alertmanager
+# (observability/alertmanager/alertmanager.yml). Its default receiver is a null sink, so alerts
+# are visible in the Alertmanager/Prometheus UI but notify nobody until a real receiver is added.
+# Metric names: mytheus-backend/design/metrics.md (all prefixed `mytheus_`).
+groups:
+  - name: mytheus-pipeline
+    rules:
+      - alert: ConsumerLagHigh
+        # Lag above 5s SUSTAINED for 5 minutes, per consumer group/topic.
+        expr: max by (service, group, topic) (mytheus_consumer_lag_seconds) > 5
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: "Consumer lag > 5s for 5m ({{ $labels.service }} {{ $labels.group }}/{{ $labels.topic }})"
+
+      - alert: DeadLetterQueueNonEmpty
+        # Any dead-lettered message at all in the last 5 minutes. `for: 0m` = fire immediately.
+        expr: sum by (service, topic) (increase(mytheus_consumer_dlq_total[5m])) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "Messages dead-lettered ({{ $labels.service }} {{ $labels.topic }})"
+
+      - alert: OutboxBacklogGrowing
+        expr: max by (service) (mytheus_outbox_backlog) > 1000
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "Outbox backlog > 1000 for 10m ({{ $labels.service }}); is the relay running?"
+
+      - alert: ConsumerStalled
+        # consumer_lag_seconds does not grow while a consumer is stalled (metrics.md), so also
+        # alert when a consumer that was processing stops processing.
+        expr: sum by (service, group, topic) (increase(mytheus_consumer_messages_processed_total[15m])) == 0 and sum by (service, group, topic) (increase(mytheus_consumer_messages_processed_total[1h])) > 0
+        for: 5m
+        labels: { severity: warn }
+        annotations:
+          summary: "Consumer stopped processing ({{ $labels.service }} {{ $labels.group }}/{{ $labels.topic }})"
+
+      - alert: TargetDown
+        expr: up == 0
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.job }}/{{ $labels.instance }} is not scrapable (down, or serves no /metrics)"
+
+      - alert: AudioTapWorkerDown
+        # absent() also fires when the target was never discovered or is not deployed at all.
+        expr: absent(up{job="workers",service="audio-tap-worker"} == 1)
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "No audio-tap-worker scrape target is up for 2m; meeting audio is not reaching transcription"

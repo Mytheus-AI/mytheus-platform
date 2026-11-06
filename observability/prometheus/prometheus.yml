@@ -1,0 +1,92 @@
+# Prometheus scrape config. Internal-only; see deploy/compose.prod.yml (profile: observability).
+#
+# Metric names are the contract in mytheus-backend/design/metrics.md (all prefixed `mytheus_`).
+# HTTP services expose /metrics on their port. Queue workers / relays expose a standalone
+# exporter only when METRICS_PORT is set; compose.prod.yml sets it (9100) and the `workers` job
+# below scrapes it. The Temporal `workflow` worker has no exporter and is not scraped.
+# A target that serves no /metrics shows up as `up == 0` (alert: TargetDown, warning only).
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs: [{ targets: ["localhost:9090"] }]
+
+  # Backend tier (all uvicorn on :8000, docker DNS service names).
+  - job_name: backend
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - web:8000
+          - api-gateway:8000
+          - bff:8000
+          - identity-tenant-service:8000
+          - meeting-service:8000
+          - integration-service:8000
+          - billing-metering-service:8000
+          - admin-ops-service:8000
+          - notification-service:8000
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: service
+
+  # Intelligence tier (profile: intelligence; ner/kg only if their profiles are on).
+  - job_name: intelligence
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - embedding-service:8101
+          - reranker-service:8102
+          - ingestion-service:8103
+          - search-service:8104
+          - ner-service:8105
+          - knowledge-graph-service:8106
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: service
+
+  # Realtime tier (profile: realtime).
+  - job_name: realtime
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - realtime-gateway:8090
+          - transcription-service:8091
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: service
+
+  # Non-HTTP workers (METRICS_PORT=9100 in compose.prod.yml). relay and the core-api/meeting
+  # consumers + audio-tap-worker are in the default profile;
+  # the rest only exist with profile `intelligence`.
+  - job_name: workers
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - relay:9100
+          - embedding-worker:9100
+          - embedding-relay:9100
+          - ingestion-worker:9100
+          - search-worker:9100
+          - core-api-consumer:9100
+          - meeting-consumer:9100
+          - audio-tap-worker:9100
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "([^:]+):.*"
+        target_label: service
+
+  - job_name: alertmanager
+    static_configs: [{ targets: ["alertmanager:9093"] }]
