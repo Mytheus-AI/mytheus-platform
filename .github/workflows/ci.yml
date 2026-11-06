@@ -13,16 +13,21 @@ on:
 jobs:
   python:
     # Python repos: mytheus-backend, mytheus-intelligence, mytheus-events, transcription-service.
-    # This repo has no pyproject.toml, so the job is skipped here instead of failing `uv sync`.
-    if: hashFiles('pyproject.toml') != ''
+    # This repo has no pyproject.toml, so the steps are skipped here instead of failing `uv sync`.
+    # (hashFiles() is not allowed in a job-level `if`, which makes the whole workflow invalid.)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v3
+        if: hashFiles('pyproject.toml') != ''
       - run: uv sync
+        if: hashFiles('pyproject.toml') != ''
       - run: uv run ruff check . && uv run black --check .
+        if: hashFiles('pyproject.toml') != ''
       - run: uv run mypy .
+        if: hashFiles('pyproject.toml') != ''
       - run: uv run pytest -q
+        if: hashFiles('pyproject.toml') != ''
 
   authz-check:
     # Shift-left security: every FastAPI route must declare an auth dependency or be explicitly
