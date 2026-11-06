@@ -91,7 +91,7 @@ x-backend-app: &backend-app
 #   prod.db.ai-relay.env     embedding-relay   DATABASE_URL as mytheus_ai_relay
 #   prod.embedding.env       embedding*        QDRANT_API_KEY (WRITE) - nobody else holds it
 #   prod.search.env          search*, kg       QDRANT_READ_ONLY_API_KEY
-#   prod.ingestion.env       ingestion*        S3_* / MINIO_* object-storage credential (R2)
+#   prod.ingestion.env       ingestion*        S3_* object-storage credential (Cloudflare R2)
 #   prod.realtime.env        realtime-gateway  Clerk JWKS URL etc. (no DB credential at all)
 #   prod.transcription.env   transcription     Deepgram + LiveKit + its DB credential
 #   prod.grafana.env         grafana           admin password

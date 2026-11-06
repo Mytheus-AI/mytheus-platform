@@ -169,7 +169,7 @@ environment. `ner` and `kg` are separate profiles (disabled unless named).
   internal. A basic-auth Grafana block is in `caddy/mytheus.caddy`, commented out.
 - **Qdrant keys**: write key only in `env/prod.embedding.env`; read-only key in `env/prod.search.env`.
 - **Object storage**: Cloudflare R2 (ADR-0023), no MinIO. `S3_*` in `prod.platform.env`/`prod.ingestion.env`
-  (the intelligence code still reads `MINIO_*`, so both are listed until it is renamed).
+  (the intelligence code reads `S3_*` first and falls back to `MINIO_*` only for local MinIO).
 - **GPU**: `docker compose -f compose.prod.yml -f compose.gpu.yml --profile intelligence up -d`.
 - Validate: `POSTGRES_PASSWORD=x PUBLIC_HOSTNAME=:80 docker compose -f compose.prod.yml --profile '*' config -q`.
 - Prometheus/Grafana read `../observability`; if the deploy tool (Dokploy) does not preserve the repo
