@@ -471,11 +471,9 @@ services:
 
   # --- Intelligence tier (profile: intelligence) ----------------------------------------------
   #
-  # Ports follow the 8100+ block (embedding 8101 ... kg 8106). NOTE the dev `Run:` lines in
-  # mytheus-intelligence/services/*/main.py use a DIFFERENT numbering (rag 8101, kg 8102,
-  # search 8103, ingestion 8104); the README assigns none. The compose command pins the port,
-  # so there is no clash here, but local-dev and prod disagree until the intelligence repo is
-  # updated. None publish a port; reachable only on the docker network.
+  # Container-internal ports (embedding 8101, reranker 8102, ingestion 8103, search 8104 ... kg 8106).
+  # They are independent of the local dev ports in mytheus-intelligence/README.md (8200 block).
+  # None publish a port; reachable only on the docker network.
 
   # Vector store. The two-key split mirrors mytheus-intelligence/docker-compose.yml and
   # libs/shared/qdrant.py: the WRITE key (QDRANT__SERVICE__API_KEY) goes to embedding-service
