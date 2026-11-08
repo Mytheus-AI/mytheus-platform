@@ -86,6 +86,9 @@ fi
 if [[ -z "$(get prod.db.ai-relay.env DATABASE_URL)" ]]; then
   put prod.db.ai-relay.env DATABASE_URL "postgresql+asyncpg://mytheus_ai_relay:$(rand)@postgres:5432/mytheus"
 fi
+# embedding-relay reads RELAY_DATABASE_URL (relay_main.py) and otherwise falls back to a
+# localhost dev default, so the same URL goes under that name too.
+put prod.db.ai-relay.env RELAY_DATABASE_URL "$(get prod.db.ai-relay.env DATABASE_URL)" || true
 pw_of() { local u; u="$(get "$1" DATABASE_URL)"; u="${u#*://}"; u="${u%%@*}"; printf '%s' "${u#*:}"; }
 
 if [[ -z "$(get prod.qdrant.env QDRANT__SERVICE__API_KEY)" ]]; then
