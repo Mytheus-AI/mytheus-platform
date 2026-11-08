@@ -25,7 +25,7 @@ set -euo pipefail
 
 DRY=0
 [[ "${1:-}" == "--dry-run" ]] && DRY=1
-PROFILES="workers,realtime,agents,intelligence"
+PROFILES="${MYTHEUS_PROFILES:-workers,realtime,agents,intelligence}"
 ENV_DIR="${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}"
 
 log() { echo "==> $*"; }
@@ -47,8 +47,11 @@ for f in "${cfgs[@]}"; do COMPOSE+=(-f "$f"); done
 repo="$(git -C "$WORKDIR" rev-parse --show-toplevel 2>/dev/null || true)"
 if [[ -n "$repo" ]]; then
   log "fast-forwarding $repo"
-  run git -C "$repo" fetch -q origin main
-  run git -C "$repo" merge -q --ff-only origin/main
+  # Best effort: root's own SSH key may not reach GitHub (the deploy uses its own deploy key,
+  # and every deploy already fast-forwards this checkout), so a failed fetch only warns.
+  if [[ $DRY == 0 ]] && ! { git -C "$repo" fetch -q origin main && git -C "$repo" merge -q --ff-only origin/main; }; then
+    echo "   warning: could not fast-forward; continuing on $(git -C "$repo" log --oneline -1)"
+  fi
 fi
 
 # --- 2. credential files ---------------------------------------------------------------------
@@ -71,18 +74,19 @@ APP_URL="$(get prod.db.app.env DATABASE_URL)"
 put prod.db.core-consumer.env DATABASE_URL "$APP_URL" || true
 put prod.db.meeting-consumer.env DATABASE_URL "$APP_URL" || true
 put prod.transcription.env DATABASE_URL "$APP_URL" || true
+# audio-tap-worker resolves the room to its meeting through the shared DB session, so it needs
+# a DATABASE_URL despite the "no DB" note in the compose file.
+put prod.audio-tap.env DATABASE_URL "$APP_URL" || true
 
-# The AI roles get NEW passwords only when their file has none; the same value goes to Postgres
-# in step 3. AI_PW_* stay empty when the file already had one (nothing to change).
-AI_PW_APP=""; AI_PW_RELAY=""
+# The AI roles get a new password only when their file has none. Step 3 then applies whatever
+# the file holds to the role every run, so a file written before the role existed still takes.
 if [[ -z "$(get prod.db.ai.env DATABASE_URL)" ]]; then
-  AI_PW_APP="$(rand)"
-  put prod.db.ai.env DATABASE_URL "postgresql+asyncpg://mytheus_ai_app:${AI_PW_APP}@postgres:5432/mytheus"
+  put prod.db.ai.env DATABASE_URL "postgresql+asyncpg://mytheus_ai_app:$(rand)@postgres:5432/mytheus"
 fi
 if [[ -z "$(get prod.db.ai-relay.env DATABASE_URL)" ]]; then
-  AI_PW_RELAY="$(rand)"
-  put prod.db.ai-relay.env DATABASE_URL "postgresql+asyncpg://mytheus_ai_relay:${AI_PW_RELAY}@postgres:5432/mytheus"
+  put prod.db.ai-relay.env DATABASE_URL "postgresql+asyncpg://mytheus_ai_relay:$(rand)@postgres:5432/mytheus"
 fi
+pw_of() { local u; u="$(get "$1" DATABASE_URL)"; u="${u#*://}"; u="${u%%@*}"; printf '%s' "${u#*:}"; }
 
 if [[ -z "$(get prod.qdrant.env QDRANT__SERVICE__API_KEY)" ]]; then
   w="$(rand)"; r="$(rand)"
@@ -116,17 +120,21 @@ fi
 
 # --- 3. migrations, then role passwords -------------------------------------------------------
 export COMPOSE_PROFILES="$PROFILES"
-log "pulling tier images"
-run "${COMPOSE[@]}" pull -q migrate-transcription migrate-intelligence
+has() { [[ ",$PROFILES," == *",$1,"* ]]; }
 log "running tier migrations"
-run "${COMPOSE[@]}" run --rm --no-deps migrate-transcription
-run "${COMPOSE[@]}" run --rm --no-deps migrate-intelligence
+if has realtime; then
+  run "${COMPOSE[@]}" pull -q migrate-transcription
+  run "${COMPOSE[@]}" run --rm --no-deps -T migrate-transcription </dev/null
+fi
+if has intelligence; then
+  run "${COMPOSE[@]}" pull -q migrate-intelligence
+  run "${COMPOSE[@]}" run --rm --no-deps -T migrate-intelligence </dev/null
+fi
 
-if [[ -n "$AI_PW_APP$AI_PW_RELAY" ]]; then
-  log "setting AI role passwords"
-  sql=""
-  [[ -n "$AI_PW_APP" ]] && sql+="ALTER ROLE mytheus_ai_app PASSWORD '${AI_PW_APP}';"
-  [[ -n "$AI_PW_RELAY" ]] && sql+="ALTER ROLE mytheus_ai_relay PASSWORD '${AI_PW_RELAY}';"
+if has intelligence; then
+  log "applying AI role passwords"
+  sql="ALTER ROLE mytheus_ai_app PASSWORD '$(pw_of prod.db.ai.env)';"
+  sql+="ALTER ROLE mytheus_ai_relay PASSWORD '$(pw_of prod.db.ai-relay.env)';"
   # Over stdin, so the passwords never appear in a process list or the shell history.
   if [[ $DRY == 1 ]]; then echo "   (dry-run) would ALTER ROLE the AI roles"; else
     # As the schema owner from prod.db.migrate.env (it holds CREATEROLE). The password goes in
@@ -149,8 +157,9 @@ if [[ $DRY == 0 ]]; then
 fi
 
 caddy="$(docker ps --format '{{.Names}}' | while read -r c; do
-  docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$c" | grep -q '/etc/caddy/conf.d' && echo "$c"
-done | head -1)"
+  # `|| true`: under pipefail a container without the mount would otherwise end the script.
+  if docker inspect -f '{{range .Mounts}}{{.Destination}} {{end}}' "$c" | grep -q '/etc/caddy/conf.d'; then echo "$c"; fi
+done | head -1 || true)"
 frag="${repo:-$WORKDIR/..}/deploy/caddy/mytheus.caddy"
 if [[ -n "$caddy" && -f "$frag" ]]; then
   confd="$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/etc/caddy/conf.d"}}{{.Source}}{{end}}{{end}}' "$caddy")"
