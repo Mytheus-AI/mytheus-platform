@@ -38,6 +38,15 @@ mytheus.cloud, www.mytheus.cloud {
 	tls internal
 }
 
+# The signed-in app. Same container as the apex: mytheus-ui's middleware splits the hosts
+# (marketing on the apex, the app and every auth step here, `/` opens /dashboard). Clerk shares
+# the session across mytheus.cloud subdomains, so a sign-in here holds on the apex too.
+dashboard.mytheus.cloud {
+	encode zstd gzip
+	reverse_proxy mytheus-webapp:3000
+	tls internal
+}
+
 vps.mytheus.cloud {
 	encode zstd gzip
 	reverse_proxy dokploy:3000

@@ -141,6 +141,23 @@ docker compose -f compose.prod.yml logs -f relay workflow    # workers running
   itself is broken. Both run the same compose file under the same project name, `mytheus`, so
   they share one set of containers and one set of volumes rather than creating a second stack.
 
+## Enable every tier (workers, realtime, agents, intelligence)
+
+From your machine, in this repo:
+
+```bash
+scripts/push-secrets.sh all      # LiveKit, Deepgram, audio token (both ends), R2, Clerk JWKS
+scripts/push-secrets.sh agents   # Anthropic key + billing caller token
+ssh root@187.127.190.246 'bash -s -- --dry-run' < scripts/enable-tiers.sh   # look first
+ssh root@187.127.190.246 'bash -s' < scripts/enable-tiers.sh
+```
+
+`enable-tiers.sh` derives the remaining credential files on the server (consumer and
+transcription DB URLs from `prod.db.app.env`, fresh AI role passwords and Qdrant keys), runs the
+`migrate-transcription` / `migrate-intelligence` one-shots, sets the AI role passwords, writes
+`COMPOSE_PROFILES` into the compose project's `.env`, syncs the Caddy fragment and brings the
+stack up. It never regenerates a value that already exists and never prints one.
+
 ## Optional tiers (compose profiles)
 
 Off by default so the forced-command `up -d --pull always` cannot fail on an image that is not
