@@ -952,6 +952,34 @@ services:
     expose:
       - "8091"
 
+  # One-shot schema migrations for the optional tiers. Each tier owns its own Alembic history
+  # (its own version table), and production had never run either, so transcript_chunks and the
+  # intelligence schema did not exist there. They run as the schema owner from
+  # prod.db.migrate.env, on every `up` with their profile, and exit; a no-op when at head.
+  migrate-transcription:
+    image: ${TRANSCRIPTION_IMAGE:-ghcr.io/mytheus-ai/mytheus-transcription:main}
+    pull_policy: always
+    profiles: ["realtime"]
+    restart: "no"
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.migrate.env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  migrate-intelligence:
+    image: ${INTELLIGENCE_IMAGE:-ghcr.io/mytheus-ai/mytheus-intelligence:main}
+    pull_policy: always
+    profiles: ["intelligence"]
+    restart: "no"
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.migrate.env
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
   # --- Observability (profile: observability) -----------------------------------------------
   #
   # INTERNAL ONLY: no published ports and no Caddy route (a commented, basic-auth-gated Grafana

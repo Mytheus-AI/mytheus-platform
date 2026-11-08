@@ -76,7 +76,9 @@ done | push prod.env
 
 if [ "$MODE" = "all" ]; then
   printf 'INTERNAL_AUDIO_TOKEN=%s\n' "$(value "$TRANSCRIPTION" INTERNAL_AUDIO_TOKEN)" | push prod.audio-tap.env
-  for k in DEEPGRAM_API_KEY LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
+  # The same token on BOTH ends: audio-tap-worker presents it, transcription-service checks it.
+  # It used to reach only prod.audio-tap.env, so transcription refused every tap connection.
+  for k in INTERNAL_AUDIO_TOKEN DEEPGRAM_API_KEY LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do
     printf '%s=%s\n' "$k" "$(value "$TRANSCRIPTION" "$k")"
   done | push prod.transcription.env
   for k in S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY; do
