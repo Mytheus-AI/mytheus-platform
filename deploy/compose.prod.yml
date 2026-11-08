@@ -163,6 +163,14 @@ services:
       - --pandaproxy-addr http://0.0.0.0:8082
     volumes:
       - redpandadata:/var/lib/redpanda/data
+    # Redpanda budgets topic_fds_per_partition (5) open files per partition and refuses to create
+    # partitions past nofile / 5. Docker's default nofile of 1024 capped it at 204 partitions,
+    # far below the 738 the canonical topic set needs, so create_topics.sh failed at the first
+    # 24-partition topic after transcript-chunks (180).
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     healthcheck:
       test: ["CMD-SHELL", "rpk cluster health | grep -E 'Healthy:.+true'"]
       interval: 10s
