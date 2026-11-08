@@ -3,6 +3,8 @@
 #
 #   scripts/push-secrets.sh            # what the RUNNING stack needs now: LiveKit into prod.env
 #   scripts/push-secrets.sh all        # also stage the AI and realtime tiers (Deepgram, R2, ...)
+#   scripts/push-secrets.sh agents     # stage the Plan 7 agent tier: Anthropic key + a fresh
+#                                      # billing caller token (prod.agents.env + prod.env)
 #   scripts/push-secrets.sh --dry-run  # print file and key NAMES only; touch nothing
 #
 # Values travel over SSH stdin: they are never printed, never put in a command line, never logged.
@@ -14,11 +16,11 @@ DIR="/etc/dokploy/mytheus-secrets/env"
 ROOT="${MYTHEUS_ROOT:-$HOME/Projects/Mytheus}"
 BACKEND="$ROOT/mytheus-backend/.env"
 TRANSCRIPTION="$ROOT/mytheus-realtime/services/transcription-service/.env"
-INTELLIGENCE="$ROOT/mytheus-intelligence/.env"
+INTELLIGENCE="${MYTHEUS_INTELLIGENCE_ENV:-$ROOT/mytheus-intelligence/.env}"
 
 MODE="live"; DRY=0
 for a in "$@"; do
-  case "$a" in all) MODE="all" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
+  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
 done
 
 # value FILE KEY -> prints the value, or aborts when it is missing, empty or a placeholder.
@@ -43,6 +45,29 @@ push() {
     cat "$tmp" >> "$f"; n="$(wc -l < "$tmp")"; rm -f "$tmp"; chmod 600 "$f"
     echo "wrote $f ($n keys)"'
 }
+
+if [ "$MODE" = "agents" ]; then
+  # Read and validate EVERYTHING first, at top level, so a missing key aborts before any file
+  # on the server is touched (an abort inside a piped group would only end that subshell).
+  anthropic="$(value "$INTELLIGENCE" ANTHROPIC_API_KEY)"
+  # Optional: only needed when the key is not scoped to a workspace.
+  ws="$(grep -m1 '^ANTHROPIC_WORKSPACE_ID=' "$INTELLIGENCE" 2>/dev/null | cut -d= -f2- || true)"
+  # One shared secret, generated here and never printed: billing-metering-service reads the
+  # caller list from prod.env, agent-runtime presents its entry from prod.agents.env.
+  token="$(openssl rand -hex 32)"
+  {
+    printf 'BILLING_SERVICE_TOKEN=%s
+' "$token"
+    printf 'ANTHROPIC_API_KEY=%s
+' "$anthropic"
+    if [ -n "$ws" ]; then printf 'ANTHROPIC_WORKSPACE_ID=%s
+' "$ws"; fi
+  } | push prod.agents.env
+  printf 'MYTHEUS_BILLING_CALLER_TOKENS=agent-runtime-service=%s
+' "$token" | push prod.env
+  echo "done. Enable the profiles on the host (COMPOSE_PROFILES=workers,agents,realtime) and redeploy."
+  exit 0
+fi
 
 # Needed by the running stack: meeting-service mints LiveKit tokens from prod.env.
 for k in LIVEKIT_URL LIVEKIT_API_KEY LIVEKIT_API_SECRET; do

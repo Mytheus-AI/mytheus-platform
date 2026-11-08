@@ -402,6 +402,76 @@ services:
       redpanda:
         condition: service_healthy
 
+  # --- Plan 7: metering and the personal-listener agent (mytheus-docs ADR-0029, ADR-0030) ----
+  #
+  # billing-consumer meters `usage-events` into usage_events / agent_budgets and the Redis
+  # budget mirror. billing-temporal-worker runs the nightly rollup activity that the
+  # `usage-rollup-nightly` schedule (registered by `workflow`) dispatches to billing's task
+  # queue. Both are request-path roles (mytheus_app, RLS per tenant), like billing itself.
+  billing-consumer:
+    <<: *backend-app
+    profiles: [workers]
+    command: ["python", "-m", "services.billing_metering_service.consumer"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      billing-metering-service:
+        condition: service_started
+      redpanda:
+        condition: service_healthy
+
+  billing-temporal-worker:
+    <<: *backend-app
+    profiles: [workers]
+    command: ["python", "-m", "services.billing_metering_service.temporal_worker"]
+    depends_on:
+      temporal:
+        condition: service_started
+      migrate:
+        condition: service_completed_successfully
+
+  # Profile `agents`. get_user_context over gRPC (identity.proto), mesh-internal only: no Caddy
+  # route, no published port. The agent runtime is its only caller.
+  identity-grpc:
+    <<: *backend-app
+    profiles: [agents]
+    command: ["python", "-m", "services.identity_tenant_service.grpc_server"]
+    expose:
+      - "50051"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Profile `agents`. Consumes transcript-chunks + meeting-room-events, runs PersonalListenerAgent,
+  # produces agent-results / agent-stream / usage-events / notifications. Writes NO Postgres, so it
+  # gets no database credential. prod.agents.env holds its secrets only:
+  #   ANTHROPIC_API_KEY, ANTHROPIC_WORKSPACE_ID (when the key is not workspace-scoped),
+  #   BILLING_SERVICE_TOKEN (= the agent-runtime-service entry of MYTHEUS_BILLING_CALLER_TOKENS,
+  #   which billing-metering-service reads from prod.env).
+  # Every model call is gated on the tenant budget; with billing unreachable it calls nothing.
+  agent-runtime:
+    <<: *intel
+    profiles: [agents]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.agents.env
+        required: false
+    command: ["python", "-m", "services.agent_runtime_service.consumer"]
+    environment:
+      BILLING_URL: http://billing-metering-service:8000
+      IDENTITY_GRPC_ADDR: identity-grpc:50051
+      METRICS_PORT: "9100"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      billing-metering-service:
+        condition: service_started
+      identity-grpc:
+        condition: service_started
+
   meeting-consumer:
     <<: *backend
     # Opt-in (`--profile workers`): Needs the prod.db.meeting-consumer.env database role. Without them it would crash-loop on a plain `up`.
