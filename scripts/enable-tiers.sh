@@ -99,6 +99,11 @@ if [[ -z "$(get prod.qdrant.env QDRANT__SERVICE__API_KEY)" ]]; then
   put prod.search.env QDRANT_READ_ONLY_API_KEY "$r" || true
 fi
 
+# meeting-service -> core-api room-state reports (mytheus-backend internal_meetings.py). Both
+# services read prod.env, so one shared entry serves as core-api's allowlist and as
+# meeting-service's own secret. Without it, meetings simply keep their status.
+put prod.env MYTHEUS_CORE_CALLER_TOKENS "meeting-service=$(rand)" || true
+
 put prod.platform.env REDIS_URL "redis://redis:6379/0" || true
 put prod.platform.env REDPANDA_BROKERS "redpanda:29092" || true
 put prod.platform.env SCHEMA_REGISTRY_URL "http://redpanda:8081" || true
