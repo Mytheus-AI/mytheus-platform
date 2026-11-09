@@ -120,6 +120,47 @@ fi
 # meeting-service's own secret. Without it, meetings simply keep their status.
 put prod.env MYTHEUS_CORE_CALLER_TOKENS "meeting-service=$(rand)" || true
 
+# rag-service (mytheus-docs ADR-0033). It authenticates the asker itself, then calls every
+# dependency as itself with ONE secret, RAG_SERVICE_TOKEN (prod.rag.env), which each callee lists
+# under its own caller-tokens key: core-api (retrieval scope) and billing (budget read-through)
+# in prod.env, knowledge-graph-service in prod.kg.env, search-grpc in prod.search.env,
+# embedding-service in prod.embedding.env, reranker-service in prod.reranker.env. Its own
+# allowlist, MYTHEUS_RAG_CALLER_TOKENS, admits agent-runtime-service (QuestionAgent grounding),
+# whose secret goes to prod.agents.env as RAG_CALLER_TOKEN. The Anthropic key and the Qdrant
+# READ-ONLY key are copied in so rag-service reads no other tier's file.
+# add_caller FILE KEY NAME SECRET: make NAME=SECRET the entry for NAME in a comma-separated
+# allowlist, leaving every other caller's entry as it is. An up-to-date entry is a no-op; a stale
+# one (push-secrets.sh rewrote a list, or a token was regenerated) is replaced. Never printed.
+add_caller() {
+  local f="$ENV_DIR/$1" cur rest="" e
+  cur="$(get "$1" "$2")"
+  [[ ",$cur," == *",$3=$4,"* ]] && return 0
+  IFS=',' read -ra entries <<<"$cur"
+  for e in "${entries[@]}"; do [[ -n "$e" && "$e" != "$3="* ]] && rest="${rest:+$rest,}$e"; done
+  if [[ $DRY == 1 ]]; then echo "   (dry-run) would set $3 in $2 in $1"; return 0; fi
+  touch "$f"; sed -i "/^$2=/d" "$f"
+  printf '%s=%s\n' "$2" "${rest:+$rest,}$3=$4" >>"$f"; chmod 600 "$f"
+  echo "   set $3 in $2 in $1"
+}
+put prod.rag.env RAG_SERVICE_TOKEN "$(rand)" || true
+rag_token="$(get prod.rag.env RAG_SERVICE_TOKEN)"
+if [[ -n "$rag_token" ]]; then
+  add_caller prod.env MYTHEUS_CORE_CALLER_TOKENS rag-service "$rag_token"
+  add_caller prod.env MYTHEUS_BILLING_CALLER_TOKENS rag-service "$rag_token"
+  add_caller prod.kg.env MYTHEUS_KG_CALLER_TOKENS rag-service "$rag_token"
+  add_caller prod.search.env MYTHEUS_SEARCH_CALLER_TOKENS rag-service "$rag_token"
+  add_caller prod.embedding.env MYTHEUS_EMBED_CALLER_TOKENS rag-service "$rag_token"
+  add_caller prod.reranker.env MYTHEUS_RERANK_CALLER_TOKENS rag-service "$rag_token"
+fi
+put prod.agents.env RAG_CALLER_TOKEN "$(rand)" || true
+put prod.agents.env RAG_URL "http://rag-service:8107" || true
+agent_rag="$(get prod.agents.env RAG_CALLER_TOKEN)"
+[[ -n "$agent_rag" ]] && add_caller prod.rag.env MYTHEUS_RAG_CALLER_TOKENS agent-runtime-service "$agent_rag"
+put prod.rag.env QDRANT_READ_ONLY_API_KEY "$(get prod.search.env QDRANT_READ_ONLY_API_KEY)" || true
+put prod.rag.env ANTHROPIC_API_KEY "$(get prod.agents.env ANTHROPIC_API_KEY)" || true
+ws="$(get prod.agents.env ANTHROPIC_WORKSPACE_ID)"
+[[ -n "$ws" ]] && { put prod.rag.env ANTHROPIC_WORKSPACE_ID "$ws" || true; }
+
 put prod.platform.env REDIS_URL "redis://redis:6379/0" || true
 put prod.platform.env REDPANDA_BROKERS "redpanda:29092" || true
 put prod.platform.env SCHEMA_REGISTRY_URL "http://redpanda:8081" || true

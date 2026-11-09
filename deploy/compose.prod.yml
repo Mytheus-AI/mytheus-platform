@@ -298,6 +298,11 @@ services:
   api-gateway:
     <<: *backend-app
     command: ["uvicorn", "services.api_gateway.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # rag-service listens on 8107 like the rest of the intelligence tier, not the gateway's
+    # default :8000. Until the intelligence profile is up, /api/rag answers 503 and nothing
+    # else changes.
+    environment:
+      UPSTREAM_RAG_SERVICE: http://rag-service:8107
     depends_on:
       web:
         condition: service_healthy
@@ -623,7 +628,8 @@ services:
 
   # --- Intelligence tier (profile: intelligence) ----------------------------------------------
   #
-  # Container-internal ports (embedding 8101, reranker 8102, ingestion 8103, search 8104 ... kg 8106).
+  # Container-internal ports (embedding 8101, reranker 8102, ingestion 8103, search 8104 ... kg 8106,
+  # rag 8107; search-grpc 50103).
   # They are independent of the local dev ports in mytheus-intelligence/README.md (8200 block).
   # None publish a port; reachable only on the docker network.
 
@@ -732,6 +738,9 @@ services:
     <<: *intel
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # MYTHEUS_RERANK_CALLER_TOKENS (rag-service), written by scripts/enable-tiers.sh.
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.reranker.env
         required: false
     command: ["uvicorn", "services.reranker_service.main:app", "--host", "0.0.0.0", "--port", "8102"]
     environment:
@@ -844,6 +853,72 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
+
+  # search-service's internal gRPC surface for rag-service (mytheus-docs ADR-0033): FtsSearch
+  # (the FTS arm, participant-scoped) and GetPassages (text and neighbouring chunks for vector
+  # hits). Same image, same DB role and env as search-service; only rag-service's service
+  # credentials or a user token are accepted. Not routed by Caddy or the gateway.
+  search-grpc:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.search.env
+        required: false
+    command: ["python", "-m", "services.search_service.grpc_main"]
+    environment:
+      GRPC_PORT: "50103"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import socket; socket.create_connection(('127.0.0.1', 50103), 2).close()"
+    expose:
+      - "50103"
+
+  # POST /api/rag/query (mytheus-docs doc 09, ADR-0033), reached only through api-gateway. An
+  # orchestrator: no model in process, no Postgres. Reads Qdrant with the READ-ONLY key, calls
+  # core-api (scope), search-grpc, embedding-service, reranker-service, knowledge-graph-service
+  # (optional, profile kg) and billing as itself with RAG_SERVICE_TOKEN, meters LLM tokens on
+  # usage-events. Secrets in prod.rag.env, written by scripts/enable-tiers.sh.
+  rag-service:
+    <<: *intel
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.rag.env
+        required: false
+    command: ["uvicorn", "services.rag_service.main:app", "--host", "0.0.0.0", "--port", "8107"]
+    environment:
+      CORE_API_URL: http://core-api:8000
+      EMBEDDING_URL: http://embedding-service:8101/internal
+      RERANKER_URL: http://reranker-service:8102/internal
+      SEARCH_GRPC_URL: search-grpc:50103
+      KNOWLEDGE_GRAPH_URL: http://knowledge-graph-service:8106
+      BILLING_URL: http://billing-metering-service:8000
+    depends_on:
+      qdrant:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+    healthcheck:
+      <<: *healthz-py
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8107/healthz').status==200 else 1)"
+    expose:
+      - "8107"
 
   # Disabled by default (profile `ner` only; NOT enabled by `intelligence`). Own image and
   # Dockerfile (services/ner_service/Dockerfile: spaCy, no DB, no Qdrant). Container port is
