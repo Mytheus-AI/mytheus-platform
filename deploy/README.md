@@ -167,7 +167,8 @@ environment. `ner` and `kg` are separate profiles (disabled unless named).
 | Profile | Services | Internal ports |
 | --- | --- | --- |
 | `intelligence` | qdrant, embedding-service(+worker, relay), reranker-service, ingestion-service(+worker), search-service(+worker) | embedding 8101, reranker 8102, ingestion 8103, search 8104 |
-| `ner` / `kg` | ner-service / knowledge-graph-service | 8105 / 8106 |
+| `ner` | ner-service | 8105 |
+| `kg` | age (dedicated Apache AGE Postgres, ADR-0031), knowledge-graph-service (read API), knowledge-graph-worker (the graph writer) | 8106 (age 5432, internal) |
 | `realtime` | realtime-gateway, transcription-service | 8090 / 8091 |
 | `observability` | prometheus, grafana | 9090 / 3000 (internal only) |
 

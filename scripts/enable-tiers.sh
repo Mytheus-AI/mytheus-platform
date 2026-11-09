@@ -99,6 +99,22 @@ if [[ -z "$(get prod.qdrant.env QDRANT__SERVICE__API_KEY)" ]]; then
   put prod.search.env QDRANT_READ_ONLY_API_KEY "$r" || true
 fi
 
+# The knowledge graph (profile kg, mytheus-docs ADR-0031): the AGE container's superuser, the
+# worker/API's AGE_DATABASE_URL, and the one caller token bff presents to the read API. bff
+# reads prod.env; the graph services read prod.kg.env and never prod.env.
+if [[ -z "$(get prod.age.env POSTGRES_PASSWORD)" ]]; then
+  p="$(rand)"
+  put prod.age.env POSTGRES_USER nexus_graph
+  put prod.age.env POSTGRES_PASSWORD "$p"
+  put prod.age.env POSTGRES_DB nexus_graph
+  put prod.kg.env AGE_DATABASE_URL "postgresql://nexus_graph:$p@age:5432/nexus_graph" || true
+fi
+if [[ -z "$(get prod.env MYTHEUS_KG_SERVICE_TOKEN)" ]]; then
+  t="$(rand)"
+  put prod.env MYTHEUS_KG_SERVICE_TOKEN "$t"
+  put prod.kg.env MYTHEUS_KG_CALLER_TOKENS "bff=$t" || true
+fi
+
 # meeting-service -> core-api room-state reports (mytheus-backend internal_meetings.py). Both
 # services read prod.env, so one shared entry serves as core-api's allowlist and as
 # meeting-service's own secret. Without it, meetings simply keep their status.

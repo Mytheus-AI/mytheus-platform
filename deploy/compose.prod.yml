@@ -316,6 +316,11 @@ services:
   bff:
     <<: *backend-app
     command: ["uvicorn", "services.bff.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # The decision-lineage screen reads knowledge-graph-service (profile `kg`); its service
+    # token MYTHEUS_KG_SERVICE_TOKEN is in prod.env. Without the kg profile the screen says
+    # history is unavailable (503) and nothing else changes.
+    environment:
+      KNOWLEDGE_GRAPH_URL: http://knowledge-graph-service:8106
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -862,23 +867,42 @@ services:
     expose:
       - "8105"
 
-  # Disabled by default (profile `kg`): scaffold that answers only /healthz today. Needs
-  # Postgres+AGE; reads (never writes) Qdrant.
+  # --- Knowledge graph (profile: kg) ---------------------------------------------------------
+  # mytheus-docs ADR-0031 D1: the production Postgres image has no Apache AGE, so the graph
+  # `nexus_knowledge` lives in its own self-hosted AGE Postgres. It is a projection of confirmed
+  # decisions/action_items and can be rebuilt from them (services/knowledge_graph_service/
+  # rebuild.py), so it has its own volume and is not in the relational PITR timeline. No port
+  # is published. Credentials: prod.age.env (the container's superuser) and prod.kg.env
+  # (AGE_DATABASE_URL + MYTHEUS_KG_CALLER_TOKENS), both written by scripts/enable-tiers.sh.
+  age:
+    image: apache/age:release_PG16_1.6.0
+    profiles: ["kg"]
+    restart: unless-stopped
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.age.env
+        required: false
+    volumes:
+      - agedata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # Read side: POST /graph/query/{template} and the read-only POST /graph/cypher, for `bff`
+  # (the decision-lineage screen) and later rag-service. Service-token auth, never routed by
+  # api-gateway. Needs no Qdrant and no relational credential.
   knowledge-graph-service:
     <<: *intel
     profiles: ["kg"]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
-      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
-        required: false
-      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.search.env
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.kg.env
         required: false
     command: ["uvicorn", "services.knowledge_graph_service.main:app", "--host", "0.0.0.0", "--port", "8106"]
     depends_on:
-      qdrant:
-        condition: service_healthy
-      postgres:
+      age:
         condition: service_healthy
     healthcheck:
       <<: *healthz-py
@@ -889,6 +913,32 @@ services:
         - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8106/healthz').status==200 else 1)"
     expose:
       - "8106"
+
+  # Write side, the graph's only writer: Topic seeding from tenant-events, and edges from
+  # confirmed decisions/actions plus meeting-room-events joins. Its inbox and graph-events
+  # outbox rows live in the relational Postgres as mytheus_ai_app (embedding-relay drains them).
+  knowledge-graph-worker:
+    <<: *intel
+    profiles: ["kg"]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.kg.env
+        required: false
+    command: ["python", "-m", "services.knowledge_graph_service.worker"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      age:
+        condition: service_healthy
+      redpanda:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
 
   # --- Realtime tier (profile: realtime) ----------------------------------------------------
 
@@ -1069,6 +1119,7 @@ volumes:
   redisdata:
   redpandadata:
   qdrantdata:
+  agedata:
   prometheusdata:
   alertmanagerdata:
   grafanadata:
