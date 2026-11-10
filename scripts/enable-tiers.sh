@@ -176,6 +176,23 @@ put prod.agents.env KG_CALLER_TOKEN "$(rand)" || true
 agent_kg="$(get prod.agents.env KG_CALLER_TOKEN)"
 [[ -n "$agent_kg" ]] && add_caller prod.kg.env MYTHEUS_KG_CALLER_TOKENS agent-runtime-service "$agent_kg"
 put prod.agents.env PROACTIVE_AGENT_ALL_PLANS "1" || true
+# P12 (mytheus-docs ADR-0037): integration-service, its callers and the admin consoles. One secret
+# per calling service, kept in prod.env and listed in the callee's allowlist. Provider app
+# credentials (GOOGLE_OAUTH_*, SLACK_*, JIRA_*) are NOT generated: set them in prod.env after
+# registering each app; until then the provider shows "Not configured".
+put prod.env OAUTH_REDIRECT_BASE "https://api.mytheus.cloud" || true
+put prod.env APP_BASE_URL "https://dashboard.mytheus.cloud" || true
+put prod.env OAUTH_STATE_SECRET "$(rand)" || true
+put prod.env INTEGRATION_SERVICE_URL "http://integration-service:8000" || true
+put prod.env CORE_API_URL "http://core-api:8000" || true
+put prod.env MYTHEUS_NOTIFICATION_SERVICE_TOKEN "$(rand)" || true
+put prod.env MYTHEUS_INTEGRATION_SERVICE_TOKEN "$(rand)" || true
+put prod.env MYTHEUS_ADMIN_OPS_SERVICE_TOKEN "$(rand)" || true
+v="$(get prod.env MYTHEUS_WORKFLOW_SERVICE_TOKEN)"; [[ -n "$v" ]] && add_caller prod.env MYTHEUS_INTEGRATION_CALLER_TOKENS workflow-service "$v"
+v="$(get prod.env MYTHEUS_NOTIFICATION_SERVICE_TOKEN)"; [[ -n "$v" ]] && add_caller prod.env MYTHEUS_INTEGRATION_CALLER_TOKENS notification-service "$v"
+v="$(get prod.env MYTHEUS_INTEGRATION_SERVICE_TOKEN)"; [[ -n "$v" ]] && add_caller prod.env MYTHEUS_CORE_CALLER_TOKENS integration-service "$v"
+v="$(get prod.env MYTHEUS_ADMIN_OPS_SERVICE_TOKEN)"; [[ -n "$v" ]] && add_caller prod.env MYTHEUS_IDENTITY_CALLER_TOKENS admin-ops-service "$v"
+# MYTHEUS_STAFF_USER_IDS (internal user uuids allowed into /admin/ops) is set by hand, never here.
 put prod.agents.env RAG_CALLER_TOKEN "$(rand)" || true
 put prod.agents.env RAG_URL "http://rag-service:8107" || true
 agent_rag="$(get prod.agents.env RAG_CALLER_TOKEN)"
