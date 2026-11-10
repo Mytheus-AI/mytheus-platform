@@ -7,7 +7,8 @@ lint:
 	actionlint .github/workflows/ci.yml
 	POSTGRES_PASSWORD=validate PUBLIC_HOSTNAME=:80 \
 		docker compose -f deploy/compose.prod.yml config >/dev/null
-	@echo "lint OK: workflows valid, compose.prod.yml valid"
+	scripts/check-observability.sh
+	@echo "lint OK: workflows valid, compose.prod.yml valid, observability valid"
 
 typecheck:
 	@echo "platform has no typed sources (infra-as-code); nothing to typecheck"
