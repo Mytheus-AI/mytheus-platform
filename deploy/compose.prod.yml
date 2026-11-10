@@ -530,6 +530,41 @@ services:
       redpanda:
         condition: service_healthy
 
+  # integration-service background processes (P12, mytheus-docs ADR-0037). The worker drains the
+  # verified webhook inbox and renews provider push channels; the consumer reads confirmed
+  # `actions` (group integration-service) and creates the Jira issue. Both write integration-service's
+  # own tables as mytheus_app. Provider app credentials are optional: an unconfigured provider is
+  # simply not connectable.
+  integration-worker:
+    <<: *backend
+    profiles: [workers]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.core-consumer.env
+        required: false
+    command: ["python", "-m", "services.integration_service.worker"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  integration-consumer:
+    <<: *backend
+    profiles: [workers]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.env
+        required: false
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.core-consumer.env
+        required: false
+    command: ["python", "-m", "services.integration_service.consumer"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
   # meeting-events -> MeetingLifecycleWorkflow (start on created, signal-with-start on ended).
   # Separate process from the Temporal worker (`workflow`). No DB credential: it only talks to
   # Redpanda and Temporal. Activities authenticate to core-api / meeting-service with the
