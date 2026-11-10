@@ -1176,6 +1176,11 @@ services:
     command: ["uvicorn", "transcription_service.main:app", "--host", "0.0.0.0", "--port", "8091"]
     environment:
       TRANSCRIPTION_WS_BIND: "0.0.0.0"
+      # ADR-0039 D1: when a meeting's stream opens, the org's vocabulary (glossary terms and
+      # aliases, products, customers) is read with GetOrgContext and sent to Deepgram Nova-3 as
+      # `keyterm`, so names and jargon transcribe correctly. Same address agent-runtime uses.
+      # Unset or unreachable: streams open without key terms, nothing else changes.
+      IDENTITY_GRPC_ADDR: identity-grpc:50051
     depends_on:
       redis:
         condition: service_healthy
