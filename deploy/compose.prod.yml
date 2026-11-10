@@ -794,6 +794,14 @@ services:
     environment:
       EMBEDDING_GPU: "0"
       METRICS_PORT: "9100"
+      # Never record + confidential meetings (polish plan; intelligence libs/shared/index_guard.py):
+      # the org's never-record topics over GetOrgContext (read strictly: unreachable means the
+      # chunk is retried, never indexed unvetted), the meeting's confidentiality from core-api
+      # (CORE_CALLER_TOKEN, this service's MYTHEUS_CORE_CALLER_TOKENS entry, in its env file), and
+      # the triage check through the budget gate (BILLING_SERVICE_TOKEN, ANTHROPIC_API_KEY).
+      IDENTITY_GRPC_ADDR: identity-grpc:50051
+      CORE_URL: http://core-api:8000
+      BILLING_URL: http://billing-metering-service:8000
     depends_on:
       qdrant:
         condition: service_healthy
@@ -932,6 +940,14 @@ services:
     command: ["python", "-m", "services.search_service.worker"]
     environment:
       METRICS_PORT: "9100"
+      # Never record + confidential meetings (polish plan; intelligence libs/shared/index_guard.py):
+      # the org's never-record topics over GetOrgContext (read strictly: unreachable means the
+      # chunk is retried, never indexed unvetted), the meeting's confidentiality from core-api
+      # (CORE_CALLER_TOKEN, this service's MYTHEUS_CORE_CALLER_TOKENS entry, in its env file), and
+      # the triage check through the budget gate (BILLING_SERVICE_TOKEN, ANTHROPIC_API_KEY).
+      IDENTITY_GRPC_ADDR: identity-grpc:50051
+      CORE_URL: http://core-api:8000
+      BILLING_URL: http://billing-metering-service:8000
     depends_on:
       qdrant:
         condition: service_healthy
@@ -1160,7 +1176,7 @@ services:
     expose:
       - "8090"
 
-  # Deepgram WS proxy. Internal only (LiveKit's audio hook connects over the docker network).
+  # Deepgram WS proxy. Internal for the LiveKit audio hook; only `/capture/*` is public (Caddy).
   # Holds its own DB credential (transcript_chunks) + Deepgram + LiveKit; nothing else does.
   # /healthz does NOT reflect consumer liveness (known gap 8b).
   transcription-service:
@@ -1168,6 +1184,11 @@ services:
     pull_policy: always
     profiles: ["realtime"]
     restart: unless-stopped
+    # `/capture/*` on the api host reaches this service (the browser capture extension); the
+    # alias is namespaced for the shared Caddy, like `mytheus-realtime`.
+    networks:
+      default:
+        aliases: ["mytheus-transcription"]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false

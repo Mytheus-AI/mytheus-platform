@@ -63,10 +63,18 @@ api.mytheus.cloud {
 	# itself against Clerk's JWKS. Same host as the API so browsers need no extra origin/CORS.
 	# Unique alias `mytheus-realtime`, for the same shared-network reason as `mytheus-webapp`.
 	# Until the `realtime` compose profile is enabled this path answers 502, nothing else changes.
-	# Caddy proxies WebSocket upgrades without extra config. transcription-service, qdrant, the
-	# intelligence services, prometheus and grafana are deliberately NOT routed.
+	# Caddy proxies WebSocket upgrades without extra config. transcription-service (except /capture/*), qdrant,
+	# the intelligence services, prometheus and grafana are deliberately NOT routed.
 	handle /socket.io/* {
 		reverse_proxy mytheus-realtime:8090
+	}
+	# The browser capture extension streams a call's tab audio to transcription-service's
+	# `/capture/audio` WebSocket. It is the one transcription path open to the internet, and it
+	# authenticates itself: a 15-minute HS256 capture token minted by the web app for one
+	# meeting, plus an Origin check against the extension's fixed id. Every other transcription
+	# path (the LiveKit audio hook) stays internal. Unique alias, same shared-network reason.
+	handle /capture/* {
+		reverse_proxy mytheus-transcription:8091
 	}
 	handle {
 		reverse_proxy api-gateway:8000

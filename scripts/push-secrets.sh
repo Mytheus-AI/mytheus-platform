@@ -5,6 +5,10 @@
 #   scripts/push-secrets.sh all        # also stage the AI and realtime tiers (Deepgram, R2, ...)
 #   scripts/push-secrets.sh agents     # stage the Plan 7 agent tier: Anthropic key + a fresh
 #                                      # billing caller token (prod.agents.env + prod.env)
+#   scripts/push-secrets.sh polish     # polish plan wave 1: service-to-service tokens for the
+#                                      # index guard, bff -> rag, core-api -> notification, and
+#                                      # the capture secret. Generated ON the server, idempotent
+#                                      # (an entry that exists is kept), backed up first.
 #   scripts/push-secrets.sh --dry-run  # print file and key NAMES only; touch nothing
 #
 # Values travel over SSH stdin: they are never printed, never put in a command line, never logged.
@@ -20,7 +24,7 @@ INTELLIGENCE="${MYTHEUS_INTELLIGENCE_ENV:-$ROOT/mytheus-intelligence/.env}"
 
 MODE="live"; DRY=0
 for a in "$@"; do
-  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
+  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; polish) MODE="polish" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
 done
 
 # value FILE KEY -> prints the value, or aborts when it is missing, empty or a placeholder.
@@ -66,6 +70,62 @@ if [ "$MODE" = "agents" ]; then
   printf 'MYTHEUS_BILLING_CALLER_TOKENS=agent-runtime-service=%s
 ' "$token" | push prod.env
   echo "done. Enable the profiles on the host (COMPOSE_PROFILES=workers,agents,realtime) and redeploy."
+  exit 0
+fi
+
+if [ "$MODE" = "polish" ]; then
+  if [ "$DRY" = 1 ]; then
+    echo "would write prod.env: MYTHEUS_CORE_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_BILLING_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_RAG_CALLER_TOKENS(+bff) MYTHEUS_NOTIFICATION_CALLER_TOKENS(+core-api) RAG_SERVICE_URL NOTIFICATION_SERVICE_URL"
+    echo "would write prod.embedding.env, prod.search.env: CORE_CALLER_TOKEN BILLING_SERVICE_TOKEN ANTHROPIC_API_KEY ANTHROPIC_WORKSPACE_ID"
+    echo "would write prod.rag.env: MYTHEUS_RAG_CALLER_TOKENS(+bff)"
+    echo "would write prod.transcription.env: CAPTURE_TOKEN_SECRET CAPTURE_ALLOWED_ORIGINS"
+    echo "would write prod.ui.env: CAPTURE_TOKEN_SECRET CAPTURE_INGEST_URL"
+    exit 0
+  fi
+  # Everything happens on the server: the secrets are generated there and never cross this
+  # machine, the Anthropic key is copied from prod.agents.env, and nothing is echoed but names.
+  ssh "$HOST" "DIR='$DIR' bash -s" <<'REMOTE'
+set -euo pipefail
+cd "$DIR"; umask 077
+ts=$(date +%Y%m%d%H%M%S); mkdir -p "/root/env-backups/$ts"; cp -a ./*.env "/root/env-backups/$ts/"
+gen() { openssl rand -hex 32; }
+entry() { grep "^$2=" "$1" 2>/dev/null | cut -d= -f2- | tr , '\n' | grep "^$3=" | cut -d= -f2- || true; }
+# add NAME=VALUE to the comma list KEY in FILE; an existing entry for NAME is kept
+add() { local f=$1 k=$2 n=$3 v=$4; touch "$f"
+  if [ -n "$(entry "$f" "$k" "$n")" ]; then echo "kept $f $k:$n"; return; fi
+  if grep -q "^$k=" "$f"; then sed -i "s|^$k=\(.*\)\$|$k=\1,$n=$v|" "$f"; else echo "$k=$n=$v" >> "$f"; fi
+  echo "set  $f $k:$n"; }
+# set KEY=VALUE in FILE unless KEY already has a value
+put() { local f=$1 k=$2 v=$3; touch "$f"
+  if [ -n "$(grep "^$k=" "$f" | cut -d= -f2- || true)" ]; then echo "kept $f $k"; return; fi
+  sed -i "/^$k=/d" "$f"; echo "$k=$v" >> "$f"; echo "set  $f $k"; }
+anthropic=$(grep -m1 '^ANTHROPIC_API_KEY=' prod.agents.env | cut -d= -f2-)
+ws=$(grep -m1 '^ANTHROPIC_WORKSPACE_ID=' prod.agents.env | cut -d= -f2- || true)
+[ -n "$anthropic" ] || { echo "abort: ANTHROPIC_API_KEY missing in prod.agents.env" >&2; exit 1; }
+for svc in embedding search; do
+  add prod.env MYTHEUS_CORE_CALLER_TOKENS "$svc-service" "$(gen)"
+  add prod.env MYTHEUS_BILLING_CALLER_TOKENS "$svc-service" "$(gen)"
+  put "prod.$svc.env" CORE_CALLER_TOKEN "$(entry prod.env MYTHEUS_CORE_CALLER_TOKENS "$svc-service")"
+  put "prod.$svc.env" BILLING_SERVICE_TOKEN "$(entry prod.env MYTHEUS_BILLING_CALLER_TOKENS "$svc-service")"
+  put "prod.$svc.env" ANTHROPIC_API_KEY "$anthropic"
+  [ -z "$ws" ] || put "prod.$svc.env" ANTHROPIC_WORKSPACE_ID "$ws"
+done
+add prod.rag.env MYTHEUS_RAG_CALLER_TOKENS bff "$(gen)"
+add prod.env MYTHEUS_RAG_CALLER_TOKENS bff "$(entry prod.rag.env MYTHEUS_RAG_CALLER_TOKENS bff)"
+put prod.env RAG_SERVICE_URL http://rag-service:8107
+add prod.env MYTHEUS_NOTIFICATION_CALLER_TOKENS core-api "$(gen)"
+put prod.env NOTIFICATION_SERVICE_URL http://notification-service:8000
+cap=$(grep -m1 '^CAPTURE_TOKEN_SECRET=' prod.transcription.env | cut -d= -f2- || true); [ -n "$cap" ] || cap=$(gen)
+put prod.transcription.env CAPTURE_TOKEN_SECRET "$cap"
+put prod.transcription.env CAPTURE_ALLOWED_ORIGINS chrome-extension://hcojignndmihgefeheffdnpaimncfglf
+put prod.ui.env CAPTURE_TOKEN_SECRET "$cap"
+put prod.ui.env CAPTURE_INGEST_URL wss://api.mytheus.cloud/capture/audio
+chmod 600 ./*.env
+[ "$(entry prod.env MYTHEUS_RAG_CALLER_TOKENS bff)" = "$(entry prod.rag.env MYTHEUS_RAG_CALLER_TOKENS bff)" ] || { echo "MISMATCH bff rag token" >&2; exit 1; }
+[ "$(grep ^CAPTURE_TOKEN_SECRET= prod.ui.env)" = "$(grep ^CAPTURE_TOKEN_SECRET= prod.transcription.env)" ] || { echo "MISMATCH capture secret" >&2; exit 1; }
+echo "ok (backup in /root/env-backups/$ts)"
+REMOTE
+  echo "done. Redeploy backend, intelligence, realtime and ui so they read the new values."
   exit 0
 fi
 
