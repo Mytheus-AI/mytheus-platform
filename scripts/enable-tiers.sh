@@ -152,6 +152,22 @@ if [[ -n "$rag_token" ]]; then
   add_caller prod.embedding.env MYTHEUS_EMBED_CALLER_TOKENS rag-service "$rag_token"
   add_caller prod.reranker.env MYTHEUS_RERANK_CALLER_TOKENS rag-service "$rag_token"
 fi
+# workflow-service (P10 MeetingLifecycleWorkflow activities) calls core-api and meeting-service
+# internal routes as itself. One secret, kept in prod.env, listed in both allowlists.
+put prod.env MYTHEUS_WORKFLOW_SERVICE_TOKEN "$(rand)" || true
+wf_token="$(get prod.env MYTHEUS_WORKFLOW_SERVICE_TOKEN)"
+if [[ -n "$wf_token" ]]; then
+  add_caller prod.env MYTHEUS_CORE_CALLER_TOKENS workflow-service "$wf_token"
+  add_caller prod.env MYTHEUS_MEETING_CALLER_TOKENS workflow-service "$wf_token"
+fi
+# ContextGapAgent (P10, mytheus-docs ADR-0035): the HMAC secret behind the signed agent identity
+# (32+ chars; without it A2A is off and the agent uses RAG only), and its own core-api caller
+# token for the related-meeting hop (GET /internal/meetings/{id}/related-attendees).
+put prod.agents.env AGENT_IDENTITY_SECRET "$(rand)" || true
+put prod.agents.env CORE_URL "http://core-api:8000" || true
+put prod.agents.env CORE_CALLER_TOKEN "$(rand)" || true
+agent_core="$(get prod.agents.env CORE_CALLER_TOKEN)"
+[[ -n "$agent_core" ]] && add_caller prod.env MYTHEUS_CORE_CALLER_TOKENS agent-runtime-service "$agent_core"
 put prod.agents.env RAG_CALLER_TOKEN "$(rand)" || true
 put prod.agents.env RAG_URL "http://rag-service:8107" || true
 agent_rag="$(get prod.agents.env RAG_CALLER_TOKEN)"
