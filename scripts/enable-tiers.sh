@@ -174,6 +174,14 @@ agent_rag="$(get prod.agents.env RAG_CALLER_TOKEN)"
 [[ -n "$agent_rag" ]] && add_caller prod.rag.env MYTHEUS_RAG_CALLER_TOKENS agent-runtime-service "$agent_rag"
 put prod.rag.env QDRANT_READ_ONLY_API_KEY "$(get prod.search.env QDRANT_READ_ONLY_API_KEY)" || true
 put prod.rag.env ANTHROPIC_API_KEY "$(get prod.agents.env ANTHROPIC_API_KEY)" || true
+# rag-service verifies the asker's Clerk JWT itself (libs/shared/auth.py reads CLERK_JWKS_URL and
+# CLERK_ISSUER, plus the optional org-claim name). They live in prod.env for the backend; without
+# them every /api/rag/query was a 500 (KeyError: CLERK_JWKS_URL), shown as "Not available".
+for k in CLERK_JWKS_URL CLERK_ISSUER CLERK_JWT_INTERNAL_ORG_CLAIM; do
+  v="$(get prod.env "$k")"
+  [[ -z "$v" ]] && v="$(get prod.realtime.env "$k")"
+  [[ -n "$v" ]] && { put prod.rag.env "$k" "$v" || true; }
+done
 ws="$(get prod.agents.env ANTHROPIC_WORKSPACE_ID)"
 [[ -n "$ws" ]] && { put prod.rag.env ANTHROPIC_WORKSPACE_ID "$ws" || true; }
 
@@ -190,6 +198,7 @@ need prod.audio-tap.env INTERNAL_AUDIO_TOKEN
 need prod.transcription.env INTERNAL_AUDIO_TOKEN
 need prod.transcription.env DEEPGRAM_API_KEY
 need prod.realtime.env CLERK_JWKS_URL
+need prod.env CLERK_ISSUER
 need prod.ingestion.env S3_ACCESS_KEY_ID
 need prod.platform.env S3_ENDPOINT_URL
 need prod.agents.env ANTHROPIC_API_KEY
