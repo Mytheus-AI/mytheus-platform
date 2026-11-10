@@ -25,7 +25,7 @@ set -euo pipefail
 
 DRY=0
 [[ "${1:-}" == "--dry-run" ]] && DRY=1
-PROFILES="${MYTHEUS_PROFILES:-workers,realtime,agents,intelligence}"
+PROFILES="${MYTHEUS_PROFILES:-workers,realtime,agents,intelligence,kg}"
 ENV_DIR="${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}"
 
 log() { echo "==> $*"; }
@@ -168,6 +168,14 @@ put prod.agents.env CORE_URL "http://core-api:8000" || true
 put prod.agents.env CORE_CALLER_TOKEN "$(rand)" || true
 agent_core="$(get prod.agents.env CORE_CALLER_TOKEN)"
 [[ -n "$agent_core" ]] && add_caller prod.env MYTHEUS_CORE_CALLER_TOKENS agent-runtime-service "$agent_core"
+# ProactiveAgent (P11, mytheus-docs ADR-0036): its knowledge-graph gRPC caller identity, and the
+# D8 override that runs it on every plan (the MVP has no paying tenants yet; remove when plan
+# enforcement matters). Budget throttled/blocked still suspends it.
+put prod.agents.env KG_GRPC_ADDR "knowledge-graph-grpc:50104" || true
+put prod.agents.env KG_CALLER_TOKEN "$(rand)" || true
+agent_kg="$(get prod.agents.env KG_CALLER_TOKEN)"
+[[ -n "$agent_kg" ]] && add_caller prod.kg.env MYTHEUS_KG_CALLER_TOKENS agent-runtime-service "$agent_kg"
+put prod.agents.env PROACTIVE_AGENT_ALL_PLANS "1" || true
 put prod.agents.env RAG_CALLER_TOKEN "$(rand)" || true
 put prod.agents.env RAG_URL "http://rag-service:8107" || true
 agent_rag="$(get prod.agents.env RAG_CALLER_TOKEN)"
