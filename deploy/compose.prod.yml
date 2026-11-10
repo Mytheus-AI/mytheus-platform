@@ -670,6 +670,20 @@ services:
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.ui.env
         required: false
+    # The Next server's own calls to the gateway stay on this docker network. The env file set
+    # this to https://api.mytheus.cloud, so every server-side read left the box, crossed
+    # Cloudflare and came back through Caddy to the same api-gateway container: measured from
+    # inside the ui container, about 440 ms per call that way against 2 to 7 ms direct. Every
+    # app screen pays that once per read on each navigation, which is what made switching
+    # screens slow. This is the same upstream Caddy routes api.mytheus.cloud to (deploy/caddy/
+    # mytheus.caddy), so the gateway's token check and tenant resolution are unchanged; only
+    # the audit `ip` of a server-side call becomes the ui container's address instead of a
+    # Cloudflare edge's, and neither was ever the end user's. Browsers never see this value:
+    # API_GATEWAY_URL is read only by the server-only API client, and browser traffic (the
+    # Socket.io origin, NEXT_PUBLIC_*) still uses the public host. Declared here rather than
+    # in the env file so it is reviewed, and because `environment` overrides `env_file`.
+    environment:
+      API_GATEWAY_URL: http://api-gateway:8000
     depends_on:
       api-gateway:
         condition: service_healthy
