@@ -69,8 +69,8 @@ scrape_configs:
         target_label: service
 
   # Non-HTTP workers (METRICS_PORT=9100 in compose.prod.yml). relay and the core-api/meeting
-  # consumers + audio-tap-worker are in the default profile;
-  # the rest only exist with profile `intelligence`.
+  # consumers + audio-tap-worker are in the default profile; agent-runtime needs profile
+  # `agents`; the rest only exist with profile `intelligence`.
   - job_name: workers
     metrics_path: /metrics
     static_configs:
@@ -83,6 +83,8 @@ scrape_configs:
           - core-api-consumer:9100
           - meeting-consumer:9100
           - audio-tap-worker:9100
+          # agent-runtime (profile `agents`): the agent quality series, mytheus_agent_*
+          - agent-runtime:9100
     relabel_configs:
       - source_labels: [__address__]
         regex: "([^:]+):.*"

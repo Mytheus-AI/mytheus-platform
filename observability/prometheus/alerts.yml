@@ -51,3 +51,63 @@ groups:
         labels: { severity: page }
         annotations:
           summary: "No audio-tap-worker scrape target is up for 2m; meeting audio is not reaching transcription"
+
+  # Agent quality (polish plan, "Quality telemetry"). Series from mytheus-intelligence
+  # libs/shared/agent_metrics.py, scraped from agent-runtime:9100 (job `workers`); dashboard
+  # observability/grafana/dashboards/agents.json. These series carry `org_id` by design.
+  - name: mytheus-agents
+    rules:
+      - alert: AgentTimeToCardSlow
+        # Speech to card p50 above the 6 s target ("How we will know") for 15 minutes, per agent.
+        expr: histogram_quantile(0.5, sum by (le, agent) (rate(mytheus_agent_time_to_card_seconds_bucket[5m]))) > 6
+        for: 15m
+        labels: { severity: page }
+        annotations:
+          summary: "{{ $labels.agent }}: time to card p50 is {{ $value | humanizeDuration }} (> 6s for 15m)"
+
+      - alert: AgentParseFailureRateHigh
+        # More than 2% of model answers fail their prompt's format, with at least 50 answers in
+        # the 15 minutes so a handful of calls cannot page anyone.
+        expr: |
+          (
+            sum by (agent) (rate(mytheus_agent_parse_failures_total[15m]))
+              / sum by (agent) (rate(mytheus_agent_parsed_total[15m]))
+          ) > 0.02
+          and sum by (agent) (increase(mytheus_agent_parsed_total[15m])) >= 50
+        for: 15m
+        labels: { severity: warn }
+        annotations:
+          summary: "{{ $labels.agent }}: {{ $value | humanizePercentage }} of model answers fail their format (> 2%)"
+
+      - alert: AgentSpendPerMeetingHourOverBudget
+        # List-price model spend per hour of meeting transcript above the 3.5 USD budget, per
+        # workspace, over the last hour, once the workspace had at least 10 minutes of meeting.
+        expr: |
+          (
+            3600 * sum by (org_id) (rate(mytheus_agent_spend_usd_total[1h]))
+              / sum by (org_id) (rate(mytheus_agent_meeting_seconds_total[1h]))
+          ) > 3.5
+          and sum by (org_id) (increase(mytheus_agent_meeting_seconds_total[1h])) > 600
+        for: 30m
+        labels: { severity: warn }
+        annotations:
+          summary: "Workspace {{ $labels.org_id }}: agent spend {{ $value | printf \"%.2f\" }} USD per meeting-hour (budget 3.5)"
+
+      - alert: NeverRecordLeakEval
+        # The never-record red-team eval leaked with the CURRENT prompts. Exported by the eval
+        # harness (mytheus-intelligence tests/evalkit/report.py) to a Pushgateway or a textfile
+        # collector when one is configured; absent otherwise, and then this rule never fires.
+        expr: max by (mode) (mytheus_eval_never_record_leaks{variant="current"}) > 0
+        for: 0m
+        labels: { severity: page }
+        annotations:
+          summary: "Never-record eval ({{ $labels.mode }}): {{ $value }} leak(s) with the current prompts; do not roll out"
+
+      - alert: NeverRecordOutputCaught
+        # An agent wrote about a never-record topic the window never named, and the runtime's
+        # filter removed it. Nothing leaked, but the prompt's ground rule did not hold.
+        expr: sum by (org_id) (increase(mytheus_agent_never_record_skips_total{stage="output"}[1h])) > 0
+        for: 0m
+        labels: { severity: warn }
+        annotations:
+          summary: "Workspace {{ $labels.org_id }}: {{ $value }} agent result(s) about a never-record topic were removed in the last hour"

@@ -1,0 +1,99 @@
+# promtool unit tests for the mytheus-agents alert group (scripts/check-observability.sh runs
+# `promtool test rules` on every file here). Synthetic series, 1-minute steps.
+rule_files:
+  - ../alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # Time to card: every card takes 8-10 s -> p50 above 6 s for 15m pages; a fast agent does not.
+  - interval: 1m
+    input_series:
+      - series: 'mytheus_agent_time_to_card_seconds_bucket{agent="DecisionAgent",org_id="o1",le="6"}'
+        values: "0+0x40"
+      - series: 'mytheus_agent_time_to_card_seconds_bucket{agent="DecisionAgent",org_id="o1",le="10"}'
+        values: "0+10x40"
+      - series: 'mytheus_agent_time_to_card_seconds_bucket{agent="DecisionAgent",org_id="o1",le="+Inf"}'
+        values: "0+10x40"
+      - series: 'mytheus_agent_time_to_card_seconds_bucket{agent="PersonalListenerAgent",org_id="o1",le="6"}'
+        values: "0+10x40"
+      - series: 'mytheus_agent_time_to_card_seconds_bucket{agent="PersonalListenerAgent",org_id="o1",le="10"}'
+        values: "0+10x40"
+      - series: 'mytheus_agent_time_to_card_seconds_bucket{agent="PersonalListenerAgent",org_id="o1",le="+Inf"}'
+        values: "0+10x40"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AgentTimeToCardSlow
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: AgentTimeToCardSlow
+        exp_alerts:
+          - exp_labels: { severity: page, agent: DecisionAgent }
+            exp_annotations:
+              summary: "DecisionAgent: time to card p50 is 8s (> 6s for 15m)"
+
+  # Parse failures: 3% of 10 answers/min pages after 15m; 3% of a trickle does not.
+  - interval: 1m
+    input_series:
+      - series: 'mytheus_agent_parsed_total{agent="ActionAgent",org_id="o1"}'
+        values: "0+100x40"
+      - series: 'mytheus_agent_parse_failures_total{agent="ActionAgent",org_id="o1"}'
+        values: "0+3x40"
+      - series: 'mytheus_agent_parsed_total{agent="MeetingAgent",org_id="o1"}'
+        values: "0+1x40"
+      - series: 'mytheus_agent_parse_failures_total{agent="MeetingAgent",org_id="o1"}'
+        values: "0+1x40"
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: AgentParseFailureRateHigh
+        exp_alerts:
+          - exp_labels: { severity: warn, agent: ActionAgent }
+            exp_annotations:
+              summary: "ActionAgent: 3% of model answers fail their format (> 2%)"
+
+  # Spend: 0.1 USD per minute over 60 meeting-seconds per minute = 6 USD per meeting-hour.
+  - interval: 1m
+    input_series:
+      - series: 'mytheus_agent_spend_usd_total{agent="DecisionAgent",tier="extract",org_id="o1"}'
+        values: "0+0.1x150"
+      - series: 'mytheus_agent_meeting_seconds_total{org_id="o1"}'
+        values: "0+60x150"
+      - series: 'mytheus_agent_spend_usd_total{agent="DecisionAgent",tier="extract",org_id="o2"}'
+        values: "0+0.01x150"
+      - series: 'mytheus_agent_meeting_seconds_total{org_id="o2"}'
+        values: "0+60x150"
+    alert_rule_test:
+      - eval_time: 100m
+        alertname: AgentSpendPerMeetingHourOverBudget
+        exp_alerts:
+          - exp_labels: { severity: warn, org_id: o1 }
+            exp_annotations:
+              summary: "Workspace o1: agent spend 6.00 USD per meeting-hour (budget 3.5)"
+
+  # Never record: a leak of the current prompts pages; the worse baseline's leaks do not.
+  - interval: 1m
+    input_series:
+      - series: 'mytheus_eval_never_record_leaks{mode="offline",variant="worse"}'
+        values: "32x5"
+      - series: 'mytheus_eval_never_record_leaks{mode="live",variant="current"}'
+        values: "0 0 1 1 1"
+      - series: 'mytheus_agent_never_record_skips_total{stage="output",org_id="o1"}'
+        values: "0 0 1 1 1"
+      - series: 'mytheus_agent_never_record_skips_total{stage="window",org_id="o2"}'
+        values: "0 5 10 15 20"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NeverRecordLeakEval
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: NeverRecordLeakEval
+        exp_alerts:
+          - exp_labels: { severity: page, mode: live }
+            exp_annotations:
+              summary: "Never-record eval (live): 1 leak(s) with the current prompts; do not roll out"
+      - eval_time: 3m
+        alertname: NeverRecordOutputCaught
+        exp_alerts:
+          - exp_labels: { severity: warn, org_id: o1 }
+            exp_annotations:
+              summary: "Workspace o1: 1 agent result(s) about a never-record topic were removed in the last hour"
