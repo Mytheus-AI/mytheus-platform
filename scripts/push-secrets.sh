@@ -78,8 +78,9 @@ if [ "$MODE" = "polish" ]; then
     echo "would write prod.env: MYTHEUS_CORE_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_BILLING_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_RAG_CALLER_TOKENS(+bff) MYTHEUS_NOTIFICATION_CALLER_TOKENS(+core-api) RAG_SERVICE_URL NOTIFICATION_SERVICE_URL"
     echo "would write prod.embedding.env, prod.search.env: CORE_CALLER_TOKEN BILLING_SERVICE_TOKEN ANTHROPIC_API_KEY ANTHROPIC_WORKSPACE_ID"
     echo "would write prod.rag.env: MYTHEUS_RAG_CALLER_TOKENS(+bff)"
-    echo "would write prod.transcription.env: CAPTURE_TOKEN_SECRET CAPTURE_ALLOWED_ORIGINS"
+    echo "would write prod.transcription.env: CAPTURE_TOKEN_SECRET CAPTURE_ALLOWED_ORIGINS (extension + phone)"
     echo "would write prod.ui.env: CAPTURE_TOKEN_SECRET CAPTURE_INGEST_URL"
+    echo "would write prod.env (core-api, the phone's in-person capture): CAPTURE_TOKEN_SECRET CAPTURE_INGEST_URL"
     exit 0
   fi
   # Everything happens on the server: the secrets are generated there and never cross this
@@ -117,12 +118,19 @@ add prod.env MYTHEUS_NOTIFICATION_CALLER_TOKENS core-api "$(gen)"
 put prod.env NOTIFICATION_SERVICE_URL http://notification-service:8000
 cap=$(grep -m1 '^CAPTURE_TOKEN_SECRET=' prod.transcription.env | cut -d= -f2- || true); [ -n "$cap" ] || cap=$(gen)
 put prod.transcription.env CAPTURE_TOKEN_SECRET "$cap"
-put prod.transcription.env CAPTURE_ALLOWED_ORIGINS chrome-extension://hcojignndmihgefeheffdnpaimncfglf
+# Not a secret, so always (re)written: the extension's origin and the phone app's.
+sed -i "/^CAPTURE_ALLOWED_ORIGINS=/d" prod.transcription.env
+echo "CAPTURE_ALLOWED_ORIGINS=chrome-extension://hcojignndmihgefeheffdnpaimncfglf,mytheus-mobile://capture" >> prod.transcription.env
+echo "set  prod.transcription.env CAPTURE_ALLOWED_ORIGINS"
 put prod.ui.env CAPTURE_TOKEN_SECRET "$cap"
 put prod.ui.env CAPTURE_INGEST_URL wss://api.mytheus.cloud/capture/audio
+# core-api mints the phone's in-person capture tokens (wave 3), with the same secret.
+put prod.env CAPTURE_TOKEN_SECRET "$cap"
+put prod.env CAPTURE_INGEST_URL wss://api.mytheus.cloud/capture/audio
 chmod 600 ./*.env
 [ "$(entry prod.env MYTHEUS_RAG_CALLER_TOKENS bff)" = "$(entry prod.rag.env MYTHEUS_RAG_CALLER_TOKENS bff)" ] || { echo "MISMATCH bff rag token" >&2; exit 1; }
 [ "$(grep ^CAPTURE_TOKEN_SECRET= prod.ui.env)" = "$(grep ^CAPTURE_TOKEN_SECRET= prod.transcription.env)" ] || { echo "MISMATCH capture secret" >&2; exit 1; }
+[ "$(grep ^CAPTURE_TOKEN_SECRET= prod.env)" = "$(grep ^CAPTURE_TOKEN_SECRET= prod.transcription.env)" ] || { echo "MISMATCH capture secret (core-api)" >&2; exit 1; }
 echo "ok (backup in /root/env-backups/$ts)"
 REMOTE
   echo "done. Redeploy backend, intelligence, realtime and ui so they read the new values."
