@@ -152,12 +152,36 @@ if [[ -n "$rag_token" ]]; then
   add_caller prod.embedding.env MYTHEUS_EMBED_CALLER_TOKENS rag-service "$rag_token"
   add_caller prod.reranker.env MYTHEUS_RERANK_CALLER_TOKENS rag-service "$rag_token"
 fi
+# workflow-service (P10 MeetingLifecycleWorkflow activities) calls core-api and meeting-service
+# internal routes as itself. One secret, kept in prod.env, listed in both allowlists.
+put prod.env MYTHEUS_WORKFLOW_SERVICE_TOKEN "$(rand)" || true
+wf_token="$(get prod.env MYTHEUS_WORKFLOW_SERVICE_TOKEN)"
+if [[ -n "$wf_token" ]]; then
+  add_caller prod.env MYTHEUS_CORE_CALLER_TOKENS workflow-service "$wf_token"
+  add_caller prod.env MYTHEUS_MEETING_CALLER_TOKENS workflow-service "$wf_token"
+fi
+# ContextGapAgent (P10, mytheus-docs ADR-0035): the HMAC secret behind the signed agent identity
+# (32+ chars; without it A2A is off and the agent uses RAG only), and its own core-api caller
+# token for the related-meeting hop (GET /internal/meetings/{id}/related-attendees).
+put prod.agents.env AGENT_IDENTITY_SECRET "$(rand)" || true
+put prod.agents.env CORE_URL "http://core-api:8000" || true
+put prod.agents.env CORE_CALLER_TOKEN "$(rand)" || true
+agent_core="$(get prod.agents.env CORE_CALLER_TOKEN)"
+[[ -n "$agent_core" ]] && add_caller prod.env MYTHEUS_CORE_CALLER_TOKENS agent-runtime-service "$agent_core"
 put prod.agents.env RAG_CALLER_TOKEN "$(rand)" || true
 put prod.agents.env RAG_URL "http://rag-service:8107" || true
 agent_rag="$(get prod.agents.env RAG_CALLER_TOKEN)"
 [[ -n "$agent_rag" ]] && add_caller prod.rag.env MYTHEUS_RAG_CALLER_TOKENS agent-runtime-service "$agent_rag"
 put prod.rag.env QDRANT_READ_ONLY_API_KEY "$(get prod.search.env QDRANT_READ_ONLY_API_KEY)" || true
 put prod.rag.env ANTHROPIC_API_KEY "$(get prod.agents.env ANTHROPIC_API_KEY)" || true
+# rag-service verifies the asker's Clerk JWT itself (libs/shared/auth.py reads CLERK_JWKS_URL and
+# CLERK_ISSUER, plus the optional org-claim name). They live in prod.env for the backend; without
+# them every /api/rag/query was a 500 (KeyError: CLERK_JWKS_URL), shown as "Not available".
+for k in CLERK_JWKS_URL CLERK_ISSUER CLERK_JWT_INTERNAL_ORG_CLAIM; do
+  v="$(get prod.env "$k")"
+  [[ -z "$v" ]] && v="$(get prod.realtime.env "$k")"
+  [[ -n "$v" ]] && { put prod.rag.env "$k" "$v" || true; }
+done
 ws="$(get prod.agents.env ANTHROPIC_WORKSPACE_ID)"
 [[ -n "$ws" ]] && { put prod.rag.env ANTHROPIC_WORKSPACE_ID "$ws" || true; }
 
@@ -174,6 +198,7 @@ need prod.audio-tap.env INTERNAL_AUDIO_TOKEN
 need prod.transcription.env INTERNAL_AUDIO_TOKEN
 need prod.transcription.env DEEPGRAM_API_KEY
 need prod.realtime.env CLERK_JWKS_URL
+need prod.env CLERK_ISSUER
 need prod.ingestion.env S3_ACCESS_KEY_ID
 need prod.platform.env S3_ENDPOINT_URL
 need prod.agents.env ANTHROPIC_API_KEY

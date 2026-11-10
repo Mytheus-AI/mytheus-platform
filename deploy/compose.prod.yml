@@ -470,6 +470,9 @@ services:
   agent-runtime:
     <<: *intel
     profiles: [agents]
+    # Fixed hostname: the A2A response consumer's group is `agent-runtime-resp-{hostname}`, so a
+    # random container id would leave a stale consumer group behind on every recreate.
+    hostname: agent-runtime
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
@@ -507,6 +510,23 @@ services:
         condition: service_healthy
       redpanda:
         condition: service_healthy
+
+  # meeting-events -> MeetingLifecycleWorkflow (start on created, signal-with-start on ended).
+  # Separate process from the Temporal worker (`workflow`). No DB credential: it only talks to
+  # Redpanda and Temporal. Activities authenticate to core-api / meeting-service with the
+  # `workflow-service` entry of MYTHEUS_CORE_CALLER_TOKENS / MYTHEUS_MEETING_CALLER_TOKENS
+  # (prod.env, written by scripts/enable-tiers.sh).
+  workflow-consumer:
+    <<: *backend
+    profiles: [workers]
+    command: ["python", "-m", "services.workflow_service.consumer"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+      temporal:
+        condition: service_started
 
   # Dedicated LiveKit audio tap -> transcription-service. No DB credential at all: prod.env
   # (LIVEKIT_URL/API_KEY/API_SECRET, same source as meeting-service) + prod.audio-tap.env
