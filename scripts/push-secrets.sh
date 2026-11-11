@@ -75,9 +75,9 @@ fi
 
 if [ "$MODE" = "polish" ]; then
   if [ "$DRY" = 1 ]; then
-    echo "would write prod.env: MYTHEUS_CORE_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_BILLING_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_RAG_CALLER_TOKENS(+bff) MYTHEUS_NOTIFICATION_CALLER_TOKENS(+core-api) MYTHEUS_MEETING_CALLER_TOKENS(+core-api) RAG_SERVICE_URL NOTIFICATION_SERVICE_URL"
+    echo "would write prod.env: MYTHEUS_CORE_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_BILLING_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_RAG_CALLER_TOKENS(+bff,+core-api,+integration-service) MYTHEUS_NOTIFICATION_CALLER_TOKENS(+core-api) MYTHEUS_MEETING_CALLER_TOKENS(+core-api) RAG_SERVICE_URL NOTIFICATION_SERVICE_URL"
     echo "would write prod.embedding.env, prod.search.env: CORE_CALLER_TOKEN BILLING_SERVICE_TOKEN ANTHROPIC_API_KEY ANTHROPIC_WORKSPACE_ID"
-    echo "would write prod.rag.env: MYTHEUS_RAG_CALLER_TOKENS(+bff)"
+    echo "would write prod.rag.env: MYTHEUS_RAG_CALLER_TOKENS(+bff,+core-api,+integration-service)"
     echo "would write prod.transcription.env: CAPTURE_TOKEN_SECRET CAPTURE_ALLOWED_ORIGINS (extension + phone)"
     echo "would write prod.ui.env: CAPTURE_TOKEN_SECRET CAPTURE_INGEST_URL"
     echo "would write prod.env (core-api, the phone's in-person capture): CAPTURE_TOKEN_SECRET CAPTURE_INGEST_URL"
@@ -113,6 +113,13 @@ for svc in embedding search; do
 done
 add prod.rag.env MYTHEUS_RAG_CALLER_TOKENS bff "$(gen)"
 add prod.env MYTHEUS_RAG_CALLER_TOKENS bff "$(entry prod.rag.env MYTHEUS_RAG_CALLER_TOKENS bff)"
+# Beyond the meeting: core-api asks rag-service to check text against decisions, and
+# integration-service asks it to find promises in a Slack message. Each presents its own entry
+# (from prod.env); rag-service accepts them (prod.rag.env).
+for caller in core-api integration-service; do
+  add prod.rag.env MYTHEUS_RAG_CALLER_TOKENS "$caller" "$(gen)"
+  add prod.env MYTHEUS_RAG_CALLER_TOKENS "$caller" "$(entry prod.rag.env MYTHEUS_RAG_CALLER_TOKENS "$caller")"
+done
 put prod.env RAG_SERVICE_URL http://rag-service:8107
 add prod.env MYTHEUS_NOTIFICATION_CALLER_TOKENS core-api "$(gen)"
 # core-api -> meeting-service (off the record pauses the recording; erasure and clip videos):
