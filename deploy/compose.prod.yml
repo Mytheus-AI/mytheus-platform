@@ -438,6 +438,23 @@ services:
       redpanda:
         condition: service_healthy
 
+  # Polish wave 3: per-store data-erasure status. Each store that finishes its share of an admin
+  # erasure (transcription, embedding, search, knowledge graph) emits admin-events
+  # `erasure_completed`; this consumer (group admin-ops-service.erasure-status) records one
+  # audit row per store so Workspace > Data and privacy shows the checklist. Writes audit_logs
+  # and its inbox as the request-path role, like billing-consumer.
+  admin-erasure-status-consumer:
+    <<: *backend-app
+    profiles: [workers]
+    command: ["python", "-m", "services.admin_ops_service.erasure_consumer"]
+    environment:
+      METRICS_PORT: "9100"
+    depends_on:
+      admin-ops-service:
+        condition: service_started
+      redpanda:
+        condition: service_healthy
+
   billing-temporal-worker:
     <<: *backend-app
     profiles: [workers]
