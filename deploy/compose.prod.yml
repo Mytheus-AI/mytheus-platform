@@ -1019,6 +1019,9 @@ services:
     command: ["uvicorn", "services.rag_service.main:app", "--host", "0.0.0.0", "--port", "8107"]
     environment:
       CORE_API_URL: http://core-api:8000
+      # Beyond the meeting: the decision-conflict check and promise extraction read the org's
+      # never-record topics over GetOrgContext before any text reaches a model (fail closed).
+      IDENTITY_GRPC_ADDR: identity-grpc:50051
       EMBEDDING_URL: http://embedding-service:8101/internal
       RERANKER_URL: http://reranker-service:8102/internal
       SEARCH_GRPC_URL: search-grpc:50103
