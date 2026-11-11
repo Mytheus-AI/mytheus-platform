@@ -75,7 +75,7 @@ fi
 
 if [ "$MODE" = "polish" ]; then
   if [ "$DRY" = 1 ]; then
-    echo "would write prod.env: MYTHEUS_CORE_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_BILLING_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_RAG_CALLER_TOKENS(+bff) MYTHEUS_NOTIFICATION_CALLER_TOKENS(+core-api) RAG_SERVICE_URL NOTIFICATION_SERVICE_URL"
+    echo "would write prod.env: MYTHEUS_CORE_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_BILLING_CALLER_TOKENS(+embedding-service,+search-service) MYTHEUS_RAG_CALLER_TOKENS(+bff) MYTHEUS_NOTIFICATION_CALLER_TOKENS(+core-api) MYTHEUS_MEETING_CALLER_TOKENS(+core-api) RAG_SERVICE_URL NOTIFICATION_SERVICE_URL"
     echo "would write prod.embedding.env, prod.search.env: CORE_CALLER_TOKEN BILLING_SERVICE_TOKEN ANTHROPIC_API_KEY ANTHROPIC_WORKSPACE_ID"
     echo "would write prod.rag.env: MYTHEUS_RAG_CALLER_TOKENS(+bff)"
     echo "would write prod.transcription.env: CAPTURE_TOKEN_SECRET CAPTURE_ALLOWED_ORIGINS (extension + phone)"
@@ -115,6 +115,9 @@ add prod.rag.env MYTHEUS_RAG_CALLER_TOKENS bff "$(gen)"
 add prod.env MYTHEUS_RAG_CALLER_TOKENS bff "$(entry prod.rag.env MYTHEUS_RAG_CALLER_TOKENS bff)"
 put prod.env RAG_SERVICE_URL http://rag-service:8107
 add prod.env MYTHEUS_NOTIFICATION_CALLER_TOKENS core-api "$(gen)"
+# core-api -> meeting-service (off the record pauses the recording; erasure and clip videos):
+# meeting-service accepts core-api's entry, core-api presents it (both read prod.env).
+add prod.env MYTHEUS_MEETING_CALLER_TOKENS core-api "$(gen)"
 put prod.env NOTIFICATION_SERVICE_URL http://notification-service:8000
 cap=$(grep -m1 '^CAPTURE_TOKEN_SECRET=' prod.transcription.env | cut -d= -f2- || true); [ -n "$cap" ] || cap=$(gen)
 put prod.transcription.env CAPTURE_TOKEN_SECRET "$cap"
