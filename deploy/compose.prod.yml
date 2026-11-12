@@ -340,16 +340,17 @@ services:
       - --port
       - "8000"
     # Key custody (mytheus-docs ADR-0026): the KEK and the blind-index root are files, mounted
-    # read-only into THIS container ONLY. No other service gets them. Host files must be mode
+    # read-only into THIS container and the three integration-service processes (which
+    # envelope-encrypt oauth_tokens) ONLY. No other service gets them. Host files must be mode
     # 0400 owned by uid 10001 (the image's appuser); the provider refuses to start otherwise,
     # and mytheus-deploy.sh checks the same before `up`. create_host_path: false so a missing
     # host file is an error, not a silently created empty directory. Only paths and the
     # custody mode are set here; no key value is ever in an environment variable.
-    environment:
+    environment: &key-custody-env
       MYTHEUS_KEY_CUSTODY: local-file
       MYTHEUS_KEK_FILE: /run/secrets/mytheus_kek
       MYTHEUS_BLIND_INDEX_KEY_FILE: /run/secrets/mytheus_blind_index_key
-    volumes:
+    volumes: &key-custody-volumes
       - type: bind
         source: ${MYTHEUS_KEYS_DIR:-/etc/dokploy/mytheus-secrets/keys}/mytheus_kek
         target: /run/secrets/mytheus_kek
@@ -562,7 +563,9 @@ services:
         required: false
     command: ["python", "-m", "services.integration_service.worker"]
     environment:
+      <<: *key-custody-env
       METRICS_PORT: "9100"
+    volumes: *key-custody-volumes
     depends_on:
       redpanda:
         condition: service_healthy
@@ -577,7 +580,9 @@ services:
         required: false
     command: ["python", "-m", "services.integration_service.consumer"]
     environment:
+      <<: *key-custody-env
       METRICS_PORT: "9100"
+    volumes: *key-custody-volumes
     depends_on:
       redpanda:
         condition: service_healthy
@@ -629,6 +634,10 @@ services:
   integration-service:
     <<: *backend-app
     command: ["uvicorn", "services.integration_service.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    # Envelope-encrypts oauth_tokens (ADR-0024), so it gets the same key files as
+    # identity-tenant-service (ADR-0026 mount list).
+    environment: *key-custody-env
+    volumes: *key-custody-volumes
     depends_on:
       migrate:
         condition: service_completed_successfully

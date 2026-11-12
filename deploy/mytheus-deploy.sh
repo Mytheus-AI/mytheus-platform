@@ -59,7 +59,7 @@ done
 
 # Key custody (mytheus-docs ADR-0026). The same rules FileKeyProvider enforces at startup,
 # checked here so a bad key file stops the deploy instead of crash-looping
-# identity-tenant-service after `up`. Content is never printed.
+# identity-tenant-service or integration-service after `up`. Content is never printed.
 KEYS_DIR="${MYTHEUS_KEYS_DIR:-/etc/dokploy/mytheus-secrets/keys}"
 KEY_UID="${MYTHEUS_KEY_UID:-10001}"   # appuser in the mytheus-backend image
 log "Checking key files in $KEYS_DIR"
