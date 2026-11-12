@@ -27,6 +27,11 @@ TRANSCRIPTION="$ROOT/mytheus-realtime/services/transcription-service/.env"
 INTELLIGENCE="${MYTHEUS_INTELLIGENCE_ENV:-$ROOT/mytheus-intelligence/.env}"
 
 MODE="live"; DRY=0
+# `integrations` is taken out of the arguments here, apart from the loop below, so this mode merges
+# cleanly with modes added to that loop's one-line `case` on other branches.
+INTEGRATIONS=0; rest=()
+for a in "$@"; do if [ "$a" = integrations ]; then INTEGRATIONS=1; else rest+=("$a"); fi; done
+set -- ${rest[@]+"${rest[@]}"}
 for a in "$@"; do
   case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; polish) MODE="polish" ;; email) MODE="email" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
 done
@@ -190,6 +195,71 @@ chmod 600 ./*.env
 echo "ok (backup in /root/env-backups/$ts)"
 REMOTE
   echo "done. Redeploy backend, intelligence, realtime and ui so they read the new values."
+  exit 0
+fi
+
+# scripts/push-secrets.sh integrations [--dry-run]
+#   The OAuth app credentials of the Settings > Integrations providers, from mytheus-backend/.env
+#   into prod.env (integration-service reads it through the *backend-app anchor). Pushes whichever
+#   provider keys are present and skips the rest, listing NAMES only; a provider is "configured"
+#   on the server only when all of its keys are there (Slack also needs SLACK_SIGNING_SECRET).
+#   Also, only when unset on the server: OAUTH_STATE_SECRET (generated there, never leaves it),
+#   APP_BASE_URL (the OAuth redirect is {APP_BASE_URL}/settings/integrations/callback/{provider})
+#   and OAUTH_REDIRECT_BASE (webhooks are {OAUTH_REDIRECT_BASE}/webhooks/{provider}).
+if [ "$INTEGRATIONS" = 1 ]; then
+  groups=(
+    "google_calendar:GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET"
+    "slack:SLACK_CLIENT_ID SLACK_CLIENT_SECRET SLACK_SIGNING_SECRET"
+    "jira:JIRA_CLIENT_ID JIRA_CLIENT_SECRET"
+    "confluence:CONFLUENCE_CLIENT_ID CONFLUENCE_CLIENT_SECRET"
+    "hubspot:HUBSPOT_CLIENT_ID HUBSPOT_CLIENT_SECRET"
+    "notion:NOTION_CLIENT_ID NOTION_CLIENT_SECRET"
+  )
+  payload=""; pushed=""; skipped=""; ready=""; partial=""
+  for g in "${groups[@]}"; do
+    provider="${g%%:*}"; have=0; want=0
+    for k in ${g#*:}; do
+      want=$((want + 1))
+      v="$(grep -m1 "^$k=" "$BACKEND" 2>/dev/null | cut -d= -f2- || true)"
+      v="${v#\"}"; v="${v%\"}"; v="${v#\'}"; v="${v%\'}"
+      if [ -z "$v" ] || [[ "$v" == *...* ]] || [[ "$v" == *"<"* ]] || [ "$v" = CHANGE_ME ]; then
+        skipped="$skipped $k"
+      else
+        have=$((have + 1)); pushed="$pushed $k"; payload="$payload$k=$v"$'\n'
+      fi
+    done
+    if [ "$have" = "$want" ]; then ready="$ready $provider"; elif [ "$have" -gt 0 ]; then partial="$partial $provider"; fi
+  done
+  echo "push:${pushed:- (none)}"
+  echo "skip (missing or placeholder in $BACKEND):${skipped:- (none)}"
+  echo "configured after this push:${ready:- (none)}"
+  [ -z "$partial" ] || echo "incomplete, will stay Needs setup:$partial"
+  if [ "$DRY" = 1 ]; then
+    echo "would write prod.env:${pushed:- (nothing)}"
+    echo "would write prod.env if unset: OAUTH_STATE_SECRET (generated on the server) APP_BASE_URL OAUTH_REDIRECT_BASE"
+    exit 0
+  fi
+  [ -n "$payload" ] || { echo "nothing to push: add the provider keys to $BACKEND first (see env/prod.env.example)"; exit 0; }
+  # The remote script carries no secret, so it travels as an argument; the values travel on stdin.
+  remote="$(cat <<'REMOTE'
+set -euo pipefail
+cd "$DIR"; umask 077
+ts=$(date +%Y%m%d%H%M%S); mkdir -p "/root/env-backups/$ts"; cp -a ./*.env "/root/env-backups/$ts/"
+touch prod.env
+tmp=$(mktemp); cat > "$tmp"
+while IFS= read -r l; do [ -n "$l" ] || continue; k="${l%%=*}"; sed -i "/^${k}=/d" prod.env; echo "set  prod.env $k"; done < "$tmp"
+grep -v '^$' "$tmp" >> prod.env; rm -f "$tmp"
+put() { if [ -n "$(grep "^$1=" prod.env | cut -d= -f2- || true)" ]; then echo "kept prod.env $1"; return; fi
+  sed -i "/^$1=/d" prod.env; echo "$1=$2" >> prod.env; echo "set  prod.env $1"; }
+put OAUTH_STATE_SECRET "$(openssl rand -hex 32)"
+put APP_BASE_URL https://dashboard.mytheus.cloud
+put OAUTH_REDIRECT_BASE https://api.mytheus.cloud
+chmod 600 ./*.env
+echo "ok (backup in /root/env-backups/$ts)"
+REMOTE
+)"
+  printf '%s' "$payload" | ssh "$HOST" "DIR='$DIR' bash -c $(printf '%q' "$remote")"
+  echo "done. Redeploy mytheus-backend (integration-service reads prod.env); each configured provider then shows Ready to connect."
   exit 0
 fi
 
