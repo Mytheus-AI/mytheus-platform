@@ -9,6 +9,10 @@
 #                                      # index guard, bff -> rag, core-api -> notification, and
 #                                      # the capture secret. Generated ON the server, idempotent
 #                                      # (an entry that exists is kept), backed up first.
+#   scripts/push-secrets.sh email      # meeting invitations by email (ADR-0043): EMAIL_PROVIDER,
+#                                      # RESEND_API_KEY and EMAIL_FROM from mytheus-backend/.env,
+#                                      # plus MEETING_INVITE_TOKEN_SECRET generated ON the server
+#                                      # once (an existing value is kept), into prod.env.
 #   scripts/push-secrets.sh --dry-run  # print file and key NAMES only; touch nothing
 #
 # Values travel over SSH stdin: they are never printed, never put in a command line, never logged.
@@ -24,7 +28,7 @@ INTELLIGENCE="${MYTHEUS_INTELLIGENCE_ENV:-$ROOT/mytheus-intelligence/.env}"
 
 MODE="live"; DRY=0
 for a in "$@"; do
-  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; polish) MODE="polish" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
+  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; polish) MODE="polish" ;; email) MODE="email" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
 done
 
 # value FILE KEY -> prints the value, or aborts when it is missing, empty or a placeholder.
@@ -70,6 +74,48 @@ if [ "$MODE" = "agents" ]; then
   printf 'MYTHEUS_BILLING_CALLER_TOKENS=agent-runtime-service=%s
 ' "$token" | push prod.env
   echo "done. Enable the profiles on the host (COMPOSE_PROFILES=workers,agents,realtime) and redeploy."
+  exit 0
+fi
+
+if [ "$MODE" = "email" ]; then
+  # core-api renders the invitations and notification-service (and its consumer) sends them;
+  # all three read prod.env (deploy/compose.prod.yml, the *backend-app anchor and `web`).
+  if [ "$DRY" = 1 ]; then
+    echo "would write prod.env: EMAIL_PROVIDER RESEND_API_KEY EMAIL_FROM (from $BACKEND)"
+    echo "would write prod.env if unset: MEETING_INVITE_TOKEN_SECRET (generated on the server) APP_BASE_URL"
+    exit 0
+  fi
+  # Read and validate everything first, so a missing key aborts before the server is touched.
+  key="$(value "$BACKEND" RESEND_API_KEY)"
+  provider="$(grep -m1 '^EMAIL_PROVIDER=' "$BACKEND" 2>/dev/null | cut -d= -f2- || true)"
+  provider="${provider:-resend}"
+  [ "$provider" = "resend" ] || { echo "abort: EMAIL_PROVIDER in $BACKEND is '$provider', expected resend" >&2; exit 1; }
+  # EMAIL_FROM is a display name and an address ("Mytheus <noreply@mytheus.cloud>"), so the
+  # placeholder check in value() (which refuses '<') cannot read it. Quotes are dropped: an
+  # env_file line is taken literally after the '='.
+  from="$(grep -m1 '^EMAIL_FROM=' "$BACKEND" 2>/dev/null | cut -d= -f2- || true)"
+  from="${from#\"}"; from="${from%\"}"; from="${from#\'}"; from="${from%\'}"
+  from="${from:-Mytheus <noreply@mytheus.cloud>}"
+  [[ "$from" == *@*.* ]] || { echo "abort: EMAIL_FROM in $BACKEND is not an address" >&2; exit 1; }
+  # Values go over SSH stdin, one KEY=VALUE per line; nothing but key names is printed.
+  printf 'EMAIL_PROVIDER=%s\nRESEND_API_KEY=%s\nEMAIL_FROM=%s\n' "$provider" "$key" "$from" |
+    ssh "$HOST" "DIR='$DIR' bash -c '
+set -euo pipefail
+cd \"\$DIR\"; umask 077
+ts=\$(date +%Y%m%d%H%M%S); mkdir -p \"/root/env-backups/\$ts\"; cp -a ./*.env \"/root/env-backups/\$ts/\"
+touch prod.env
+tmp=\$(mktemp); cat > \"\$tmp\"
+while IFS= read -r l; do k=\"\${l%%=*}\"; sed -i \"/^\${k}=/d\" prod.env; done < \"\$tmp\"
+cat \"\$tmp\" >> prod.env; rm -f \"\$tmp\"
+echo \"set  prod.env EMAIL_PROVIDER RESEND_API_KEY EMAIL_FROM\"
+put() { if [ -n \"\$(grep \"^\$1=\" prod.env | cut -d= -f2- || true)\" ]; then echo \"kept prod.env \$1\"; return; fi
+  sed -i \"/^\$1=/d\" prod.env; echo \"\$1=\$2\" >> prod.env; echo \"set  prod.env \$1\"; }
+put MEETING_INVITE_TOKEN_SECRET \"\$(openssl rand -hex 32)\"
+put APP_BASE_URL https://dashboard.mytheus.cloud
+chmod 600 ./*.env
+echo \"ok (backup in /root/env-backups/\$ts)\"
+'"
+  echo "done. Redeploy mytheus-backend (core-api, notification-service, notification-consumer read prod.env)."
   exit 0
 fi
 
