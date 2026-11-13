@@ -22,7 +22,7 @@ set -euo pipefail
 HOST="${MYTHEUS_HOST:-root@187.127.190.246}"
 DIR="/etc/dokploy/mytheus-secrets/env"
 ROOT="${MYTHEUS_ROOT:-$HOME/Projects/Mytheus}"
-BACKEND="$ROOT/mytheus-backend/.env"
+BACKEND="${MYTHEUS_BACKEND_ENV:-$ROOT/mytheus-backend/.env}"  # override when your clones live elsewhere
 TRANSCRIPTION="$ROOT/mytheus-realtime/services/transcription-service/.env"
 INTELLIGENCE="${MYTHEUS_INTELLIGENCE_ENV:-$ROOT/mytheus-intelligence/.env}"
 
@@ -202,7 +202,8 @@ fi
 #   The OAuth app credentials of the Settings > Integrations providers, from mytheus-backend/.env
 #   into prod.env (integration-service reads it through the *backend-app anchor). Pushes whichever
 #   provider keys are present and skips the rest, listing NAMES only; a provider is "configured"
-#   on the server only when all of its keys are there (Slack also needs SLACK_SIGNING_SECRET).
+#   on the server only when all of its keys are there (Slack also needs SLACK_SIGNING_SECRET,
+#   Linear its LINEAR_WEBHOOK_SECRET; ADR-0044).
 #   Also, only when unset on the server: OAUTH_STATE_SECRET (generated there, never leaves it),
 #   APP_BASE_URL (the OAuth redirect is {APP_BASE_URL}/settings/integrations/callback/{provider})
 #   and OAUTH_REDIRECT_BASE (webhooks are {OAUTH_REDIRECT_BASE}/webhooks/{provider}).
@@ -211,6 +212,7 @@ if [ "$INTEGRATIONS" = 1 ]; then
     "google_calendar:GOOGLE_OAUTH_CLIENT_ID GOOGLE_OAUTH_CLIENT_SECRET"
     "slack:SLACK_CLIENT_ID SLACK_CLIENT_SECRET SLACK_SIGNING_SECRET"
     "jira:JIRA_CLIENT_ID JIRA_CLIENT_SECRET"
+    "linear:LINEAR_CLIENT_ID LINEAR_CLIENT_SECRET LINEAR_WEBHOOK_SECRET"
     "confluence:CONFLUENCE_CLIENT_ID CONFLUENCE_CLIENT_SECRET"
     "hubspot:HUBSPOT_CLIENT_ID HUBSPOT_CLIENT_SECRET"
     "notion:NOTION_CLIENT_ID NOTION_CLIENT_SECRET"
