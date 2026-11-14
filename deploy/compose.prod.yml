@@ -1013,6 +1013,30 @@ services:
     expose:
       - "50103"
 
+  # Every Myte's voice: Kokoro-82M (open-weight, Apache-2.0), served by Kokoro-FastAPI on CPU
+  # with an OpenAI-style POST /v1/audio/speech. Internal only: no published port; core-api is
+  # its only caller (/api/v1/voice/* and briefing audio, TTS_PROVIDER=kokoro by default,
+  # KOKORO_URL=http://kokoro-tts:8880). Pinned to a release at least two weeks old. Capped so a
+  # burst of speech cannot starve the rest of the stack.
+  kokoro-tts:
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.2
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 2g
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8880/v1/audio/voices', timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
   # POST /api/rag/query (mytheus-docs doc 09, ADR-0033), reached only through api-gateway. An
   # orchestrator: no model in process, no Postgres. Reads Qdrant with the READ-ONLY key, calls
   # core-api (scope), search-grpc, embedding-service, reranker-service, knowledge-graph-service
