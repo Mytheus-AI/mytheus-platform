@@ -13,6 +13,10 @@
 #                                      # RESEND_API_KEY and EMAIL_FROM from mytheus-backend/.env,
 #                                      # plus MEETING_INVITE_TOKEN_SECRET generated ON the server
 #                                      # once (an existing value is kept), into prod.env.
+#   scripts/push-secrets.sh storage    # object storage for the backend (ADR-0047 workspace logos,
+#                                      # and recordings, briefing audio, attachments): the R2 key
+#                                      # from mytheus-intelligence/.env, plus S3_BUCKET_BRANDING,
+#                                      # into prod.env. Create the private mytheus-branding bucket first.
 #   scripts/push-secrets.sh --dry-run  # print file and key NAMES only; touch nothing
 #
 # Values travel over SSH stdin: they are never printed, never put in a command line, never logged.
@@ -33,7 +37,7 @@ INTEGRATIONS=0; rest=()
 for a in "$@"; do if [ "$a" = integrations ]; then INTEGRATIONS=1; else rest+=("$a"); fi; done
 set -- ${rest[@]+"${rest[@]}"}
 for a in "$@"; do
-  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; polish) MODE="polish" ;; email) MODE="email" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
+  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; polish) MODE="polish" ;; email) MODE="email" ;; storage) MODE="storage" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
 done
 
 # value FILE KEY -> prints the value, or aborts when it is missing, empty or a placeholder.
@@ -121,6 +125,24 @@ chmod 600 ./*.env
 echo \"ok (backup in /root/env-backups/\$ts)\"
 '"
   echo "done. Redeploy mytheus-backend (core-api, notification-service, notification-consumer read prod.env)."
+  exit 0
+fi
+
+if [ "$MODE" = "storage" ]; then
+  # The backend's services read S3_* from prod.env (deploy/compose.prod.yml, the *backend-app
+  # anchor). The credential is the R2 API token ingestion already uses. Read and validate it at top
+  # level first, so a missing key aborts before the server is touched.
+  if [ "$DRY" = 1 ]; then
+    echo "would write prod.env: S3_ACCESS_KEY_ID S3_SECRET_ACCESS_KEY S3_ENDPOINT_URL (from $INTELLIGENCE) S3_REGION S3_BUCKET_BRANDING"
+    exit 0
+  fi
+  s3_key="$(value "$INTELLIGENCE" S3_ACCESS_KEY_ID)"
+  s3_secret="$(value "$INTELLIGENCE" S3_SECRET_ACCESS_KEY)"
+  s3_endpoint="$(value "$INTELLIGENCE" S3_ENDPOINT_URL)"
+  printf 'S3_ACCESS_KEY_ID=%s\nS3_SECRET_ACCESS_KEY=%s\nS3_ENDPOINT_URL=%s\nS3_REGION=auto\nS3_BUCKET_BRANDING=mytheus-branding\n' \
+    "$s3_key" "$s3_secret" "$s3_endpoint" | push prod.env
+  echo "done. Redeploy mytheus-backend (identity-tenant-service reads prod.env). The R2 token must be"
+  echo "allowed to read and write the private mytheus-branding bucket, which has no lifecycle rule."
   exit 0
 fi
 
