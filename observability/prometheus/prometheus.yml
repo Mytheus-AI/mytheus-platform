@@ -51,6 +51,9 @@ scrape_configs:
           - search-service:8104
           - ner-service:8105
           - knowledge-graph-service:8106
+          # Ask Myte latency (ADR-0049 R4): myte_first_step_seconds, myte_first_text_seconds,
+          # myte_answer_seconds.
+          - rag-service:8107
     relabel_configs:
       - source_labels: [__address__]
         regex: "([^:]+):.*"
