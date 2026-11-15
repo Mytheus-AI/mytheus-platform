@@ -61,3 +61,27 @@ data directory. Against a THROWAWAY compose project, never production:
     #   SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname='public';  -> postgres
     #   SELECT count(*) FROM information_schema.tables WHERE table_schema='public'; -> 31
     docker compose -p scratch -f ./deploy/compose.prod.yml down -v
+
+## Role hardening (`harden-roles.sql`)
+
+`supabase/postgres:15.8.1.060` ships login roles that make every row-level-security policy
+inert: `supabase_read_only_user` (LOGIN, BYPASSRLS, member of `pg_read_all_data`), and
+`authenticator` / `supabase_storage_admin` (LOGIN, members of the BYPASSRLS `service_role`).
+Mytheus uses none of them (no PostgREST, no Supabase Storage). `harden-roles.sql` neutralises
+them and marks `ts_match_vq` / `ts_match_qv` LEAKPROOF so full-text search can use its GIN
+indexes under RLS. It is idempotent and ends with a verification query that must print
+`(0 rows)`.
+
+- **New volume:** automatic. `compose.prod.yml` mounts `zz-mytheus-harden-roles.sh` into
+  `/docker-entrypoint-initdb.d` (it sorts after the image's `migrate.sh`) and the SQL at
+  `/etc/mytheus/harden-roles.sql`; the script runs it as `supabase_admin`. Verified from empty
+  on a throwaway container: `(0 rows)`.
+- **Existing database (production today):** an owner step, never run by CI or an agent:
+
+      ./deploy/postgres-init/harden-existing-db.sh <postgres-container>
+
+  Run the `pg_stat_activity` check in the script's header first. The script is safe to run
+  twice (verified: identical output).
+
+`postgres` and `supabase_admin` keep their privileges (schema owner and image superuser); the
+pool guard in every service refuses to connect as either.
