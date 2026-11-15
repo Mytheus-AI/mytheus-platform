@@ -61,6 +61,51 @@ jobs:
       - uses: actions/checkout@v4
       - run: scripts/check-observability.sh
 
+  postgres-hardening:
+    # deploy/postgres-init/harden-roles.sql on the production image, both ways it runs
+    # (journal plan Part 3 fixes 3/7): automatically on a NEW volume through the mounted
+    # zz-mytheus-harden-roles.sh, and by the operator script on an existing database, twice
+    # (it must be idempotent). Fails if any login other than postgres / supabase_admin still
+    # bypasses isolation, or if the FTS operator is not leakproof.
+    if: contains(github.repository, 'mytheus-platform')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: fresh volume with the hardening mounted exactly as compose.prod.yml mounts it
+        run: |
+          docker run -d --name pg -e POSTGRES_PASSWORD=ci -e POSTGRES_DB=mytheus \
+            -v "$PWD/deploy/postgres-init/zz-mytheus-harden-roles.sh:/docker-entrypoint-initdb.d/zz-mytheus-harden-roles.sh:ro" \
+            -v "$PWD/deploy/postgres-init/harden-roles.sql:/etc/mytheus/harden-roles.sql:ro" \
+            supabase/postgres:15.8.1.060
+          for i in $(seq 1 90); do
+            docker logs pg 2>&1 | grep -q "zz-mytheus-harden-roles.sh: hardening" \
+              && docker exec pg pg_isready -U postgres -h localhost >/dev/null 2>&1 && break
+            sleep 2
+          done
+          sleep 5
+          docker logs pg 2>&1 | grep -A8 "zz-mytheus-harden-roles"
+      - name: no login bypasses isolation, and @@ is leakproof
+        run: |
+          q() { docker exec -e PGPASSWORD=ci pg psql -h localhost -U supabase_admin -d mytheus -Atc "$1"; }
+          bad=$(q "SELECT string_agg(rolname, ',') FROM pg_roles r WHERE rolcanlogin
+                   AND rolname NOT IN ('postgres','supabase_admin')
+                   AND (rolsuper OR rolbypassrls
+                        OR pg_has_role(r.oid,'pg_read_all_data','MEMBER')
+                        OR pg_has_role(r.oid,'pg_write_all_data','MEMBER')
+                        OR EXISTS (SELECT 1 FROM pg_roles b WHERE b.oid <> r.oid
+                                   AND (b.rolsuper OR b.rolbypassrls)
+                                   AND pg_has_role(r.oid, b.oid, 'MEMBER')))")
+          [ -z "$bad" ] || { echo "::error::logins that still bypass isolation: $bad"; exit 1; }
+          [ "$(q "SELECT bool_and(proleakproof) FROM pg_proc WHERE proname IN ('ts_match_vq','ts_match_qv')")" = "t" ] \
+            || { echo "::error::ts_match_vq/ts_match_qv are not LEAKPROOF"; exit 1; }
+      - name: the operator script is idempotent on an existing database
+        run: |
+          deploy/postgres-init/harden-existing-db.sh pg > /tmp/run1.txt
+          deploy/postgres-init/harden-existing-db.sh pg > /tmp/run2.txt
+          cat /tmp/run1.txt
+          diff /tmp/run1.txt /tmp/run2.txt
+          grep -q "(0 rows)" /tmp/run1.txt
+
   security:
     runs-on: ubuntu-latest
     steps:
