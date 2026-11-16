@@ -103,6 +103,9 @@ x-intel: &intel
   env_file:
     - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
       required: false
+    # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+    - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
+      required: false
 
 x-healthz-py: &healthz-py
   interval: 10s
@@ -145,29 +148,68 @@ services:
       retries: 20
     restart: unless-stopped
 
+  # Store authentication (journal cross-store study, chains R1/R2/K1/K2): Redis and Redpanda used
+  # to trust anything on the Docker network. prod.redis.env / prod.redpanda.env are written ON
+  # the server by scripts/enable-store-auth.sh; without them both start exactly as before, so
+  # this file deploys safely ahead of that script.
   redis:
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.redis.env
+        required: false
+    # The password goes in through stdin as a config line, so it is not in the process list.
+    command:
+      - sh
+      - -c
+      - >-
+        { echo 'appendonly yes';
+        [ -n "$${REDIS_PASSWORD:-}" ] && echo "requirepass $$REDIS_PASSWORD"; true; }
+        | redis-server -
     volumes:
       - redisdata:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test:
+        - CMD-SHELL
+        - REDISCLI_AUTH="$${REDIS_PASSWORD:-}" redis-cli ping | grep -q PONG
       interval: 5s
       timeout: 3s
       retries: 20
     restart: unless-stopped
 
+  # REDPANDA_SASL=1 (prod.redpanda.env) turns on HTTP basic auth for the Schema Registry and the
+  # HTTP proxy and gives their internal clients the admin principal. Kafka SASL, the ACLs and
+  # admin-API auth are cluster properties that enable-store-auth.sh sets once; they persist in the
+  # data volume. RPK_USER / RPK_PASS / RPK_SASL_MECHANISM in the same file make every `rpk` run
+  # inside this container (healthcheck, the deploy's topic check) authenticate automatically.
   redpanda:
     image: redpandadata/redpanda:v24.1.1
+    env_file:
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.redpanda.env
+        required: false
+    entrypoint: ["/bin/bash", "-c"]
     command:
-      - redpanda start
-      - --smp 1
-      - --overprovisioned
-      - --node-id 0
-      - --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
-      - --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://redpanda:9092
-      - --schema-registry-addr http://0.0.0.0:8081
-      - --pandaproxy-addr http://0.0.0.0:8082
+      - |
+        set -e
+        args=(redpanda start --smp 1 --overprovisioned --node-id 0
+          --kafka-addr PLAINTEXT://0.0.0.0:29092,OUTSIDE://0.0.0.0:9092
+          --advertise-kafka-addr PLAINTEXT://redpanda:29092,OUTSIDE://redpanda:9092)
+        if [ "$${REDPANDA_SASL:-0}" = 1 ]; then
+          client='[{"address":"127.0.0.1","port":29092}]'
+          args+=(
+            --set 'schema_registry.schema_registry_api=[{"address":"0.0.0.0","port":8081,"authentication_method":"http_basic"}]'
+            --set "schema_registry_client.brokers=$$client"
+            --set schema_registry_client.sasl_mechanism=SCRAM-SHA-256
+            --set "schema_registry_client.scram_username=$$RPK_USER"
+            --set "schema_registry_client.scram_password=$$RPK_PASS"
+            --set 'pandaproxy.pandaproxy_api=[{"address":"0.0.0.0","port":8082,"authentication_method":"http_basic"}]'
+            --set "pandaproxy_client.brokers=$$client"
+            --set pandaproxy_client.sasl_mechanism=SCRAM-SHA-256
+            --set "pandaproxy_client.scram_username=$$RPK_USER"
+            --set "pandaproxy_client.scram_password=$$RPK_PASS")
+        else
+          args+=(--schema-registry-addr http://0.0.0.0:8081 --pandaproxy-addr http://0.0.0.0:8082)
+        fi
+        exec /usr/bin/rpk "$${args[@]}"
     volumes:
       - redpandadata:/var/lib/redpanda/data
     # Redpanda budgets topic_fds_per_partition (5) open files per partition and refuses to create
@@ -501,6 +543,9 @@ services:
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
+        required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.agents.env
         required: false
     command: ["python", "-m", "services.agent_runtime_service.consumer"]
@@ -787,6 +832,9 @@ services:
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
+        required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.embedding.env
@@ -818,6 +866,9 @@ services:
     <<: *intel
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
         required: false
@@ -852,6 +903,9 @@ services:
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
+        required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai-relay.env
         required: false
     command: ["python", "-m", "services.embedding_service.relay_main"]
@@ -867,6 +921,9 @@ services:
     <<: *intel
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
         required: false
       # MYTHEUS_RERANK_CALLER_TOKENS (rag-service), written by scripts/enable-tiers.sh.
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.reranker.env
@@ -888,6 +945,9 @@ services:
     <<: *intel
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
         required: false
@@ -916,6 +976,9 @@ services:
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
+        required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.ingestion.env
@@ -936,6 +999,9 @@ services:
     <<: *intel
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
         required: false
@@ -965,6 +1031,9 @@ services:
     <<: *intel
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
         required: false
@@ -999,6 +1068,9 @@ services:
     <<: *intel
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
         required: false
@@ -1092,6 +1164,9 @@ services:
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
+        required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.rag.env
         required: false
     command: ["uvicorn", "services.rag_service.main:app", "--host", "0.0.0.0", "--port", "8107"]
@@ -1132,6 +1207,9 @@ services:
     restart: unless-stopped
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
         required: false
     command: ["uvicorn", "services.ner_service.main:app", "--host", "0.0.0.0", "--port", "8105"]
     healthcheck:
@@ -1175,6 +1253,9 @@ services:
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
+        required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.kg.env
         required: false
     command: ["uvicorn", "services.knowledge_graph_service.main:app", "--host", "0.0.0.0", "--port", "8106"]
@@ -1200,6 +1281,9 @@ services:
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
         required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
+        required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.kg.env
         required: false
     command: ["python", "-m", "services.knowledge_graph_service.grpc_main"]
@@ -1219,6 +1303,9 @@ services:
     profiles: ["kg"]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.intelligence.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.db.ai.env
         required: false
@@ -1252,6 +1339,9 @@ services:
         aliases: ["mytheus-realtime"]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.realtime.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.realtime.env
         required: false
@@ -1289,6 +1379,9 @@ services:
         aliases: ["mytheus-transcription"]
     env_file:
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.platform.env
+        required: false
+      # This tier's broker principal and the Redis URL with its password (enable-store-auth.sh).
+      - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.store.realtime.env
         required: false
       - path: ${MYTHEUS_ENV_DIR:-/etc/dokploy/mytheus-secrets/env}/prod.transcription.env
         required: false
