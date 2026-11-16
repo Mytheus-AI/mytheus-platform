@@ -91,13 +91,25 @@ check() {
   [ "$code" = 401 ] && echo "ok   schema registry refuses anonymous" || { echo "FAIL schema registry answered $code"; ok=0; }
   rpass="$(getkey "$SECRETS" KAFKA_PASSWORD_INTELLIGENCE)"
   if [ -n "$rpass" ]; then
-    # produce as intelligence: allowed on agent-results, refused on decisions (rpk would retry a
-    # refused write for minutes, so each probe has a 15 s delivery timeout)
-    probe() { echo probe | docker exec -i "$RP" env -u RPK_USER -u RPK_PASS -u RPK_SASL_MECHANISM \
-      rpk topic produce "$1" --delivery-timeout 15s -X brokers=localhost:29092 \
-      -X user=intelligence -X pass="$rpass" -X sasl.mechanism=SCRAM-SHA-256 >/dev/null 2>&1; }
-    if probe agent-results; then echo "ok   intelligence can write agent-results"; else echo "FAIL intelligence cannot write agent-results"; ok=0; fi
-    if probe decisions; then echo "FAIL intelligence could write decisions"; ok=0; else echo "ok   intelligence cannot write decisions"; fi
+    # NEVER write to a live topic here: consumers Avro-decode every record, and a plain-text
+    # probe on agent-results crash-looped two of them (2026-11-16). The write test uses a
+    # throwaway topic the admin creates and deletes; the denial is read from the ACLs.
+    probe="store-auth-probe"
+    docker exec "$RP" rpk topic create "$probe" -p 1 >/dev/null 2>&1 || true
+    if echo probe | docker exec -i "$RP" env -u RPK_USER -u RPK_PASS -u RPK_SASL_MECHANISM \
+      rpk topic produce "$probe" --delivery-timeout 15s -X brokers=localhost:29092 \
+      -X user=intelligence -X pass="$rpass" -X sasl.mechanism=SCRAM-SHA-256 >/dev/null 2>&1; then
+      echo "ok   the intelligence principal can produce"
+    else echo "FAIL the intelligence principal cannot produce"; ok=0; fi
+    docker exec "$RP" rpk topic delete "$probe" >/dev/null 2>&1 || true
+    for p in intelligence realtime; do
+      for t in decisions actions; do
+        if docker exec "$RP" rpk acl list --deny-principal "User:$p" --topic "$t" 2>/dev/null \
+          | grep -E "TOPIC +$t " | grep -E "WRITE +DENY" >/dev/null; then
+          echo "ok   $p is denied writes to $t"
+        else echo "FAIL no deny rule for $p writing $t"; ok=0; fi
+      done
+    done
   fi
   [ "$ok" = 1 ] && say "all checks passed" || die "some checks failed"
 }
