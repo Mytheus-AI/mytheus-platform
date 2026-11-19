@@ -1092,35 +1092,13 @@ services:
     expose:
       - "50103"
 
-  # Every Myte's voice: Kokoro-82M (open-weight, Apache-2.0), served by Kokoro-FastAPI on CPU
-  # with an OpenAI-style POST /v1/audio/speech. Internal only: no published port; core-api is
-  # its only caller (/api/v1/voice/* and briefing audio, TTS_PROVIDER=kokoro by default,
-  # KOKORO_URL=http://kokoro-tts:8880). Pinned to a release at least two weeks old. Capped so a
-  # burst of speech cannot starve the rest of the stack.
-  kokoro-tts:
-    image: ghcr.io/remsky/kokoro-fastapi-cpu:v0.9.2
-    restart: unless-stopped
-    # PyTorch starts one thread per host core (8) by default; under a CPU quota that thrashes
-    # and Kokoro ran at about real time. Threads match the quota so it runs several times faster.
-    environment:
-      OMP_NUM_THREADS: "4"
-      MKL_NUM_THREADS: "4"
-      TORCH_NUM_THREADS: "4"
-    deploy:
-      resources:
-        limits:
-          cpus: "4"
-          memory: 3g
-    healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://localhost:8880/v1/audio/voices', timeout=5)"
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
+  # Every Myte's voice is Deepgram Aura-2 (mytheus-docs ADR-0052, replacing ADR-0050 D1's
+  # self-hosted Kokoro): core-api (`web`) calls https://api.deepgram.com/v1/speak itself with
+  # DEEPGRAM_API_KEY from prod.env (scripts/push-secrets.sh voice), so there is no voice
+  # container. The `kokoro-tts` service (Kokoro-82M on 4 CPUs, first audio in seconds) is gone;
+  # to bring it back, restore it from git history and set TTS_PROVIDER=kokoro in prod.env.
+  # `up -d` does not remove orphans: after the first deploy without it, run
+  # `docker rm -f mytheus-kokoro-tts-1` once on the host.
 
   # Every Myte's ears: speech to text for Talk mode, so it works in every browser (the browser's
   # own recognition only works in Chrome and Safari). speaches (faster-whisper) on CPU, an

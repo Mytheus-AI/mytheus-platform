@@ -17,6 +17,9 @@
 #                                      # and recordings, briefing audio, attachments): the R2 key
 #                                      # from mytheus-intelligence/.env, plus S3_BUCKET_BRANDING,
 #                                      # into prod.env. Create the private mytheus-branding bucket first.
+#   scripts/push-secrets.sh voice      # every Myte's voice (ADR-0052): DEEPGRAM_API_KEY from the
+#                                      # transcription service's .env, plus TTS_PROVIDER=deepgram,
+#                                      # into prod.env (core-api, the `web` service, reads it).
 #   scripts/push-secrets.sh --dry-run  # print file and key NAMES only; touch nothing
 #
 # Values travel over SSH stdin: they are never printed, never put in a command line, never logged.
@@ -37,7 +40,7 @@ INTEGRATIONS=0; rest=()
 for a in "$@"; do if [ "$a" = integrations ]; then INTEGRATIONS=1; else rest+=("$a"); fi; done
 set -- ${rest[@]+"${rest[@]}"}
 for a in "$@"; do
-  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; polish) MODE="polish" ;; email) MODE="email" ;; storage) MODE="storage" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
+  case "$a" in all) MODE="all" ;; agents) MODE="agents" ;; polish) MODE="polish" ;; email) MODE="email" ;; storage) MODE="storage" ;; voice) MODE="voice" ;; --dry-run) DRY=1 ;; *) echo "unknown argument: $a" >&2; exit 2 ;; esac
 done
 
 # value FILE KEY -> prints the value, or aborts when it is missing, empty or a placeholder.
@@ -143,6 +146,21 @@ if [ "$MODE" = "storage" ]; then
     "$s3_key" "$s3_secret" "$s3_endpoint" | push prod.env
   echo "done. Redeploy mytheus-backend (identity-tenant-service reads prod.env). The R2 token must be"
   echo "allowed to read and write the private mytheus-branding bucket, which has no lifecycle rule."
+  exit 0
+fi
+
+if [ "$MODE" = "voice" ]; then
+  # core-api speaks through Deepgram Aura-2 (text to speech) with the same key the transcription
+  # service already holds. Read and validate it at top level first, so a missing key aborts
+  # before the server is touched. TTS_PROVIDER is written too, so an older `kokoro` line is
+  # replaced rather than left to win.
+  if [ "$DRY" = 1 ]; then
+    echo "would write prod.env: DEEPGRAM_API_KEY (from $TRANSCRIPTION) TTS_PROVIDER=deepgram"
+    exit 0
+  fi
+  dg="$(value "$TRANSCRIPTION" DEEPGRAM_API_KEY)"
+  printf 'DEEPGRAM_API_KEY=%s\nTTS_PROVIDER=deepgram\n' "$dg" | push prod.env
+  echo "done. Redeploy mytheus-backend (core-api reads prod.env); the kokoro-tts container can go."
   exit 0
 fi
 
